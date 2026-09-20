@@ -1186,6 +1186,29 @@ struct macdrv_client_surface *macdrv_client_surface_create(HWND hwnd)
 }
 
 /**********************************************************************
+ *              macdrv_get_window_views
+ *
+ * Hand out the Cocoa window and the current client view of a window for
+ * external unix libraries. DXMT's winemetal.so uses them to attach a
+ * CAMetalLayer before anything has presented into the window. This must stay
+ * free of win32u calls: it runs on the guest CPU thread.
+ */
+void *macdrv_get_window_views(HWND hwnd, void **client_view_out)
+{
+    struct macdrv_win_data *data;
+    void *window = NULL, *client_view = NULL;
+
+    if ((data = get_win_data(hwnd)))
+    {
+        window = data->cocoa_window;
+        client_view = data->client_view;
+        release_win_data(data);
+    }
+    if (client_view_out) *client_view_out = client_view;
+    return window;
+}
+
+/**********************************************************************
  *              SetDesktopWindow   (MACDRV.@)
  */
 void macdrv_SetDesktopWindow(HWND hwnd)

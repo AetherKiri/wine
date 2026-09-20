@@ -33,6 +33,7 @@ SOURCES = \
 	gdi.c \
 	image.c \
 	keyboard.c \
+	macdrv_functions.m \
 	macdrv_main.c \
 	mouse.c \
 	opengl.c \
