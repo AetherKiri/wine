@@ -34,7 +34,6 @@
 #include "wine/debug.h"
 #include "wine/list.h"
 #include "wine/exception.h"
-#include "unixlib.h"   /* ml672: ios_jit_alias_probe_params */
 #include "ntdll_misc.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
@@ -195,109 +194,6 @@ static ULONG crit_sect_default_flags(void)
     return RTL_CRITICAL_SECTION_FLAG_FORCE_DEBUG_INFO;
 }
 
-/******************************************************************************
- *      RtlInitializeCriticalSection   (NTDLL.@)
- */
-/* ---- ml673: GENERATION-AWARE CRITICAL SECTION LIFECYCLE -----------------
- *
- * ml672 answered two questions and botched a third:
- *   - RX and RW agree, so this is not alias divergence.
- *   - The fatal section's neighbours are coherent.
- *   - "never deleted" was NOT established: the delete log capped at 64 events
- *     with no generation tracking, so absence there proved nothing.
- *
- * And an emulated-store watch would miss the write entirely -- [wr-strip]
- * restores write permission to the page after the first fault, so later stores
- * execute natively and never reach the Mach emulator.
- *
- * So: watch the FIELD's state machine instead of the writes. LockSemaphore is
- * 0 until a waiter needs it, then becomes a real handle via one CAS. Capture
- * every section born inside an anon-JIT alias, then report the FIRST time the
- * field leaves {0,1} for something that is not a handle we created. Generation
- * counting makes delete/reuse genuinely testable rather than assumed.
- *
- * Note also: the observed low dword 0x70 is an EVENT handle, not a semaphore --
- * so even that half is the wrong object type, which argues against a simple
- * torn write of a correct value. */
-#define IOS_CS_TRACK 512
-static struct ios_cs_slot
-{
-    ULONG64 crit;
-    ULONG64 sem_at_init;
-    ULONG64 alias_base;
-    ULONG   generation;     /* bumped on delete -- reuse shows as gen > 0 */
-    ULONG   deleted;
-    ULONG   reported;
-} ios_cs_tab[IOS_CS_TRACK];
-static LONG ios_cs_init_logged, ios_cs_trans_logged;
-
-static struct ios_cs_slot *ios_cs_slot_for( const void *crit, int create )
-{
-    ULONG64 k = (ULONG64)(ULONG_PTR)crit;
-    unsigned h = (unsigned)((k >> 4) % IOS_CS_TRACK), i;
-    for (i = 0; i < IOS_CS_TRACK; i++)
-    {
-        struct ios_cs_slot *sl = &ios_cs_tab[(h + i) % IOS_CS_TRACK];
-        if (sl->crit == k) return sl;
-        if (!sl->crit)
-        {
-            if (!create) return NULL;
-            sl->crit = k;
-            return sl;
-        }
-    }
-    return NULL;
-}
-
-/* Called right after a section is initialised. Only tracks sections that live
- * inside an anonymous JIT alias -- those are the ones sharing pages with Mono's
- * mixed code+data, which is where the contamination appears. */
-static void ios_cs_track_init( RTL_CRITICAL_SECTION *crit, void *caller )
-{
-    struct ios_jit_alias_probe_params pp;
-    struct ios_cs_slot *sl;
-    const ULONG64 *rx = (const ULONG64 *)crit;
-
-    memset( &pp, 0, sizeof(pp) );
-    pp.size = sizeof(pp); pp.version = 1; pp.addr = (ULONG64)(ULONG_PTR)crit;
-    WINE_UNIX_CALL( unix_ios_jit_alias_probe, &pp );
-    if (!pp.base) return;                      /* ordinary memory -- not our case */
-
-    if (!(sl = ios_cs_slot_for( crit, 1 ))) return;
-    if (sl->deleted) { sl->generation++; sl->deleted = 0; }
-    sl->sem_at_init = (ULONG64)(ULONG_PTR)crit->LockSemaphore;
-    sl->alias_base  = pp.base;
-    sl->reported    = 0;
-
-    if (InterlockedIncrement( &ios_cs_init_logged ) <= 24)
-        ERR( "[cs-init] ml673 crit=%p gen=%u caller=%p alias=%s write_gen=%u | "
-             "fields: %s %s %s %s %s\n",
-             crit, sl->generation, caller, wine_dbgstr_longlong(pp.base), pp.write_gen,
-             wine_dbgstr_longlong(rx[0]), wine_dbgstr_longlong(rx[1]),
-             wine_dbgstr_longlong(rx[2]), wine_dbgstr_longlong(rx[3]),
-             wine_dbgstr_longlong(rx[4]) );
-}
-
-/* Report the FIRST transition of LockSemaphore out of its internal {0,1} state
- * into something we did not put there. Bounded, once per section. */
-static void ios_cs_check_transition( RTL_CRITICAL_SECTION *crit, const char *where )
-{
-    struct ios_cs_slot *sl = ios_cs_slot_for( crit, 0 );
-    ULONG64 sem;
-    if (!sl || sl->reported) return;
-    sem = (ULONG64)(ULONG_PTR)crit->LockSemaphore;
-    if (sem <= 1 || sem < 0x10000000ull) return;      /* 0/1 internal, small = real handle */
-    sl->reported = 1;
-    if (InterlockedIncrement( &ios_cs_trans_logged ) <= 16)
-        ERR( "[cs-trans] ml673 %s crit=%p gen=%u deleted=%u sem_at_init=%s -> now=%s "
-             "lock=%ld recursion=%ld owner=%04lx\n",
-             where, crit, sl->generation, sl->deleted,
-             wine_dbgstr_longlong(sl->sem_at_init), wine_dbgstr_longlong(sem),
-             (long)crit->LockCount, (long)crit->RecursionCount,
-             HandleToULong(crit->OwningThread) );
-}
-
-
 NTSTATUS WINAPI RtlInitializeCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
     return RtlInitializeCriticalSectionEx( crit, 0, crit_sect_default_flags() );
@@ -318,7 +214,6 @@ NTSTATUS WINAPI RtlInitializeCriticalSectionAndSpinCount( RTL_CRITICAL_SECTION *
  */
 NTSTATUS WINAPI RtlInitializeCriticalSectionEx( RTL_CRITICAL_SECTION *crit, ULONG spincount, ULONG flags )
 {
-    void *ios_init_caller = __builtin_return_address(0);
     if (flags & (RTL_CRITICAL_SECTION_FLAG_DYNAMIC_SPIN|RTL_CRITICAL_SECTION_FLAG_STATIC_INIT))
         FIXME("(%p,%lu,0x%08lx) semi-stub\n", crit, spincount, flags);
 
@@ -351,7 +246,6 @@ NTSTATUS WINAPI RtlInitializeCriticalSectionEx( RTL_CRITICAL_SECTION *crit, ULON
     crit->LockSemaphore  = 0;
     if (NtCurrentTeb()->Peb->NumberOfProcessors <= 1) spincount = 0;
     crit->SpinCount = spincount & ~0x80000000;
-    ios_cs_track_init( crit, ios_init_caller );
     return STATUS_SUCCESS;
 }
 
@@ -373,19 +267,6 @@ ULONG WINAPI RtlSetCriticalSectionSpinCount( RTL_CRITICAL_SECTION *crit, ULONG s
  */
 NTSTATUS WINAPI RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
 {
-    /* ml672: record deletes so a later use of this address is identifiable as
-     * use-after-delete rather than a blind overwrite. Bounded and address-only
-     * -- enough to correlate against [cs-bad], cheap enough to leave on. */
-    {
-        static LONG del_n;
-        if (InterlockedIncrement( &del_n ) <= 64)
-            ERR( "[cs-life] ml672 delete crit=%p sem=%p lock=%ld\n",
-                 crit, crit->LockSemaphore, (long)crit->LockCount );
-    }
-    {   /* ml673: generation-aware -- makes reuse detectable rather than assumed */
-        struct ios_cs_slot *sl = ios_cs_slot_for( crit, 0 );
-        if (sl) { sl->deleted = 1; sl->reported = 0; }
-    }
     HANDLE sem;
 
     crit->LockCount      = -1;
@@ -409,69 +290,6 @@ NTSTATUS WINAPI RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
 
 
 
-
-/* ---- ml672: CRITICAL SECTION LIFECYCLE + LockSemaphore CORRUPTION ------
- *
- * botd20 died with crit=0x7026864d48 holding LockSemaphore=0x23bbf72000000070
- * -- low dword a plausible wine handle (0x70), high dword the low half of a
- * stack address. Both threads agreed on the value, so it is the FIELD that is
- * wrong, not one thread's read.
- *
- * Four candidates, and they need different fixes:
- *   1. use-after-delete / slot reuse
- *   2. an overwrite from Mono's mixed code+data allocation (this section lives
- *      inside a registered anon-RWX region)
- *   3. RX/RW alias divergence -- the two views of the same physical page
- *      disagreeing, which would be OUR aliasing broken
- *   4. a genuine critical-section lifecycle bug
- *
- * The alias comparison is what splits (3) from the rest in one shot, and it is
- * cheap: unix_ios_jit_alias_probe already resolves a guest VA to its RW alias.
- * If RX and RW disagree on the same bytes, the aliasing is broken; if they
- * agree, the memory really was overwritten and (3) is out.
- *
- * Fires ONCE per bad section and is bounded -- this runs on the lock path, so
- * it must not become the thing that slows the game down. */
-static LONG ios_cs_bad_reported;
-
-static void ios_cs_report_bad( RTL_CRITICAL_SECTION *crit, const char *where )
-{
-    struct ios_jit_alias_probe_params pp;
-    const ULONG64 *rx = (const ULONG64 *)crit;
-    ULONG64 sem = (ULONG64)(ULONG_PTR)crit->LockSemaphore;
-
-    /* 0 and 1 are the documented in-band values; a real handle is small. */
-    if (sem <= 1 || sem < 0x10000000ull) return;
-    if (InterlockedIncrement( &ios_cs_bad_reported ) > 8) return;
-
-    memset( &pp, 0, sizeof(pp) );
-    pp.size = sizeof(pp); pp.version = 1; pp.addr = (ULONG64)(ULONG_PTR)crit;
-    WINE_UNIX_CALL( unix_ios_jit_alias_probe, &pp );
-
-    ERR( "[cs-bad] ml672 %s crit=%p sem=%s lock=%ld recursion=%ld owner=%04lx debug=%p\n",
-         where, crit, wine_dbgstr_longlong(sem), (long)crit->LockCount,
-         (long)crit->RecursionCount, HandleToULong(crit->OwningThread), crit->DebugInfo );
-    ERR( "[cs-bad] ml672   alias slot=%u base=%s end=%s rw=%s write_gen=%u written=%08x\n",
-         pp.slot, wine_dbgstr_longlong(pp.base), wine_dbgstr_longlong(pp.end),
-         wine_dbgstr_longlong(pp.rw), pp.write_gen, pp.written );
-    ERR( "[cs-bad] ml672   RX view: %s %s %s %s %s\n",
-         wine_dbgstr_longlong(rx[0]), wine_dbgstr_longlong(rx[1]), wine_dbgstr_longlong(rx[2]),
-         wine_dbgstr_longlong(rx[3]), wine_dbgstr_longlong(rx[4]) );
-    if (pp.rw)
-    {
-        const ULONG64 *rw = (const ULONG64 *)(ULONG_PTR)pp.rw;
-        /* ml673: ACTUALLY COMPARE. ml672 printed "ALIAS DIVERGENCE" as fixed
-         * text regardless of the values, so it would have claimed divergence
-         * every time -- useless as a discriminator and actively misleading. */
-        int same = (rw[0]==rx[0] && rw[1]==rx[1] && rw[2]==rx[2] && rw[3]==rx[3] && rw[4]==rx[4]);
-        ERR( "[cs-bad] ml672   RW view: %s %s %s %s %s  <== %s\n",
-             wine_dbgstr_longlong(rw[0]), wine_dbgstr_longlong(rw[1]), wine_dbgstr_longlong(rw[2]),
-             wine_dbgstr_longlong(rw[3]), wine_dbgstr_longlong(rw[4]),
-             same ? "IDENTICAL to RX (no alias divergence)" : "DIFFERS from RX => ALIAS DIVERGENCE" );
-    }
-    else
-        ERR( "[cs-bad] ml672   RW view: (not in any anon-RWX alias -- plain guest memory)\n" );
-}
 
 /******************************************************************************
  *      RtlpWaitForCriticalSection   (NTDLL.@)
@@ -521,30 +339,6 @@ NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
         RtlWakeAddressSingle( lock );
         ret = STATUS_SUCCESS;
     }
-    /* iOS-Madeira ml671: [cs-raise] — Book of the Dead dies on an UNHANDLED
-     * c0000008 with flags=1 (EXCEPTION_NONCONTINUABLE). That flag is the
-     * discriminator: RtlRaiseStatus sets it, KiRaiseUserExceptionDispatcher
-     * does not -- which is why the ml669 [bad-close] probe on the NtClose path
-     * never fired. This is one of only two RtlRaiseStatus sites in sync.c, and
-     * thread 0114 was parked on a semaphore when it died.
-     *
-     * If NtReleaseSemaphore returns STATUS_INVALID_HANDLE here, the section's
-     * backing semaphore was closed underneath a live critical section -- a
-     * handle-lifetime bug, and a general one. Log the section's full state
-     * before RtlRaiseException overwrites the exception address with its own.
-     * Deliberately does not suppress: converting this to a silent return would
-     * leave the lock permanently broken instead of loudly dead. */
-    if (ret)
-    {
-        static LONG cs_raise_n;
-        if (InterlockedIncrement( &cs_raise_n ) <= 16)
-            ios_cs_report_bad( crit, "UnWait" );
-            ERR( "[cs-raise] ml671 UnWait status=%08x crit=%p sem=%p owner=%04lx "
-                 "lock=%ld recursion=%ld caller=%p\n",
-                 (unsigned int)ret, crit, crit->LockSemaphore,
-                 HandleToULong(crit->OwningThread), (long)crit->LockCount,
-                 (long)crit->RecursionCount, __builtin_return_address(0) );
-    }
     if (ret) RtlRaiseStatus( ret );
     return ret;
 }
@@ -582,19 +376,7 @@ NTSTATUS WINAPI RtlEnterCriticalSection( RTL_CRITICAL_SECTION *crit )
         }
 
         /* Now wait for it */
-        ios_cs_check_transition( crit, "Enter" );
-        if ((status = RtlpWaitForCriticalSection( crit )))
-        {
-            static LONG cs_wait_n;   /* ml671: the other RtlRaiseStatus site */
-            if (InterlockedIncrement( &cs_wait_n ) <= 16)
-                ios_cs_report_bad( crit, "Wait" );
-            ERR( "[cs-raise] ml671 Wait status=%08x crit=%p sem=%p owner=%04lx "
-                     "lock=%ld recursion=%ld caller=%p\n",
-                     (unsigned int)status, crit, crit->LockSemaphore,
-                     HandleToULong(crit->OwningThread), (long)crit->LockCount,
-                     (long)crit->RecursionCount, __builtin_return_address(0) );
-            RtlRaiseStatus( status );
-        }
+        if ((status = RtlpWaitForCriticalSection( crit ))) RtlRaiseStatus( status );
     }
 done:
     crit->OwningThread   = ULongToHandle(GetCurrentThreadId());

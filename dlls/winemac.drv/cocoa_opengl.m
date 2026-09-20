@@ -20,6 +20,8 @@
 
 #define GL_SILENCE_DEPRECATION
 #include <OpenGL/gl.h>
+#include <stdio.h>
+#include <stdlib.h>
 #import "cocoa_opengl.h"
 
 #include "macdrv_cocoa.h"
@@ -103,6 +105,24 @@
     - (void) wine_updateBackingSize:(const CGSize*)size
     {
         GLint enabled;
+
+        if (getenv("MADEIRA_SE_D3D9_DIAGNOSTICS"))
+        {
+            NSView *view = self.view ?: self.latentView;
+            NSRect frame = view ? view.frame : NSZeroRect;
+            NSRect bounds = view ? view.bounds : NSZeroRect;
+            NSRect converted = view ? [view convertRectToBacking:bounds] : NSZeroRect;
+            fprintf(stderr, "[madeira-macdrv] backing context=%p requested=%.0fx%.0f enabled=%d "
+                    "stored=%dx%d view=%p frame=%.0fx%.0f bounds=%.0fx%.0f backing=%.0fx%.0f "
+                    "best=%d scale=%.3f\n", self, size ? size->width : 0.0,
+                    size ? size->height : 0.0,
+                    CGLIsEnabled(self.CGLContextObj, kCGLCESurfaceBackingSize, &enabled) == kCGLNoError
+                            ? enabled : -1,
+                    backing_size[0], backing_size[1], view, frame.size.width, frame.size.height,
+                    bounds.size.width, bounds.size.height, converted.size.width, converted.size.height,
+                    view ? view.wantsBestResolutionOpenGLSurface : 0,
+                    view.window ? view.window.backingScaleFactor : 0.0);
+        }
 
         if (size)
         {

@@ -31,6 +31,26 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
 
+#ifdef MADEIRA_SE_WOW64_HOST
+/* Some NLS syscalls create data mappings inside ntdll instead of going
+ * through wow64_NtMapViewOfSection().  TCTI must still be told about those
+ * mappings because it accesses the biased guest arena through QEMU memory
+ * regions rather than dereferencing Wine's host pointer directly. */
+static NTSTATUS notify_madeira_data_mapping( void *addr, ULONG protect )
+{
+    MEMORY_BASIC_INFORMATION info;
+    SIZE_T ret_size;
+    NTSTATUS status;
+
+    if (!pBTCpuNotifyMapViewOfSection) return STATUS_SUCCESS;
+    status = NtQueryVirtualMemory( GetCurrentProcess(), addr, MemoryBasicInformation,
+                                   &info, sizeof(info), &ret_size );
+    if (status) return status;
+    return pBTCpuNotifyMapViewOfSection( NULL, info.BaseAddress, NULL,
+                                         info.RegionSize, 0, protect );
+}
+#endif
+
 static BOOL WINAPIV send_cross_process_notification( HANDLE process, UINT id, const void *addr, SIZE_T size,
                                                      int nb_args, ... )
 {
@@ -123,7 +143,7 @@ static NTSTATUS mem_extended_parameters_32to64( MEM_EXTENDED_PARAMETER **ret_par
     else if (set_limit)
     {
         req->LowestStartingAddress = NULL;
-        req->HighestEndingAddress  = (void *)highest_user_address;
+        req->HighestEndingAddress  = ULongToPtr( highest_user_address );
         req->Alignment             = 0;
 
         params[i].Type = MemExtendedParameterAddressRequirements;
@@ -353,6 +373,9 @@ NTSTATUS WINAPI wow64_NtGetNlsSectionPtr( UINT *args )
 
     status = NtGetNlsSectionPtr( type, id, unknown, addr_32to64( &addr, addr32 ),
                                  size_32to64( &size, size32 ));
+#ifdef MADEIRA_SE_WOW64_HOST
+    if (!status) status = notify_madeira_data_mapping( addr, PAGE_READONLY );
+#endif
     if (!status)
     {
         put_addr( addr32, addr );
@@ -406,6 +429,9 @@ NTSTATUS WINAPI wow64_NtInitializeNlsFiles( UINT *args )
     NTSTATUS status;
 
     status = NtInitializeNlsFiles( addr_32to64( &addr, addr32 ), lcid, size );
+#ifdef MADEIRA_SE_WOW64_HOST
+    if (!status) status = notify_madeira_data_mapping( addr, PAGE_READONLY );
+#endif
     if (!status) put_addr( addr32, addr );
     return status;
 }
@@ -442,6 +468,21 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size, 
     SECTION_IMAGE_INFORMATION info;
     NTSTATUS status;
 
+#ifdef MADEIRA_SE_WOW64_HOST
+    /* The regular WoW64 CPU notification only tracks executable images.
+     * Madeira-SE gives QEMU its own view of the process address space, so
+     * file/data sections (fonts, firmware tables, shared memory, and game
+     * assets) must be registered as well. */
+    if (NtCurrentTeb()->Tib.ArbitraryUserPointer &&
+        !NtQuerySection( handle, SectionImageInformation, &info, sizeof(info), NULL ) &&
+        info.Machine == current_machine)
+        init_image_mapping( addr );
+    if (!pBTCpuNotifyMapViewOfSection) return;
+    status = pBTCpuNotifyMapViewOfSection( NULL, addr, NULL, size, alloc, protect );
+    if (NT_SUCCESS(status)) return;
+    NtUnmapViewOfSection( GetCurrentProcess(), addr );
+    *ret_status = status;
+#else
     if (!NtCurrentTeb()->Tib.ArbitraryUserPointer) return;
     if (NtQuerySection( handle, SectionImageInformation, &info, sizeof(info), NULL )) return;
     if (info.Machine != current_machine) return;
@@ -451,6 +492,7 @@ static void notify_map_view_of_section( HANDLE handle, void *addr, SIZE_T size, 
     if (NT_SUCCESS(status)) return;
     NtUnmapViewOfSection( GetCurrentProcess(), addr );
     *ret_status = status;
+#endif
 }
 
 /**********************************************************************
@@ -581,7 +623,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
     case MemoryBasicInformation:  /* MEMORY_BASIC_INFORMATION */
         if (len < sizeof(MEMORY_BASIC_INFORMATION32))
             status = STATUS_INFO_LENGTH_MISMATCH;
-        else if ((ULONG_PTR)addr > highest_user_address)
+        else if ((ULONG_PTR)PtrToUlong( addr ) > highest_user_address)
             status = STATUS_INVALID_PARAMETER;
         else
         {
@@ -597,8 +639,9 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
                 info32->State = info.State;
                 info32->Protect = info.Protect;
                 info32->Type = info.Type;
-                if ((ULONG_PTR)info.BaseAddress + info.RegionSize > highest_user_address)
-                    info32->RegionSize = highest_user_address - (ULONG_PTR)info.BaseAddress + 1;
+                if ((ULONG_PTR)PtrToUlong( info.BaseAddress ) + info.RegionSize > highest_user_address)
+                    info32->RegionSize = highest_user_address -
+                                         (ULONG_PTR)PtrToUlong( info.BaseAddress ) + 1;
             }
         }
         res_len = sizeof(MEMORY_BASIC_INFORMATION32);
@@ -626,7 +669,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
     {
         if (len < sizeof(MEMORY_REGION_INFORMATION32))
             status = STATUS_INFO_LENGTH_MISMATCH;
-        else if ((ULONG_PTR)addr > highest_user_address)
+        else if ((ULONG_PTR)PtrToUlong( addr ) > highest_user_address)
             status = STATUS_INVALID_PARAMETER;
         else
         {
@@ -642,8 +685,9 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
                 info32->CommitSize = info.CommitSize;
                 info32->PartitionId = info.PartitionId;
                 info32->NodePreference = info.NodePreference;
-                if ((ULONG_PTR)info.AllocationBase + info.RegionSize > highest_user_address)
-                    info32->RegionSize = highest_user_address - (ULONG_PTR)info.AllocationBase + 1;
+                if ((ULONG_PTR)PtrToUlong( info.AllocationBase ) + info.RegionSize > highest_user_address)
+                    info32->RegionSize = highest_user_address -
+                                         (ULONG_PTR)PtrToUlong( info.AllocationBase ) + 1;
             }
         }
         res_len = sizeof(MEMORY_REGION_INFORMATION32);
@@ -673,7 +717,7 @@ NTSTATUS WINAPI wow64_NtQueryVirtualMemory( UINT *args )
     {
         if (len < sizeof(MEMORY_IMAGE_INFORMATION32)) return STATUS_INFO_LENGTH_MISMATCH;
 
-        if ((ULONG_PTR)addr > highest_user_address) status = STATUS_INVALID_PARAMETER;
+        if ((ULONG_PTR)PtrToUlong( addr ) > highest_user_address) status = STATUS_INVALID_PARAMETER;
         else
         {
             MEMORY_IMAGE_INFORMATION info;

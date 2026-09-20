@@ -22,7 +22,27 @@
 
 #include "d3d9_private.h"
 
+#include <string.h>
+
 WINE_DEFAULT_DEBUG_CHANNEL(d3d9);
+
+static BOOL d3d9_madeira_soft_reset_enabled(void)
+{
+    char value[8];
+    DWORD length;
+
+    length = GetEnvironmentVariableA("MADEIRA_SE_D3D9_SOFT_RESET", value, sizeof(value));
+    return length && (!strcmp(value, "1") || !strcmp(value, "true"));
+}
+
+static BOOL d3d9_madeira_diagnostics_enabled(void)
+{
+    char value[8];
+    DWORD length;
+
+    length = GetEnvironmentVariableA("MADEIRA_SE_D3D9_DIAGNOSTICS", value, sizeof(value));
+    return length && (!strcmp(value, "1") || !strcmp(value, "true"));
+}
 
 static void STDMETHODCALLTYPE d3d9_null_wined3d_object_destroyed(void *parent) {}
 
@@ -1129,6 +1149,12 @@ static HRESULT d3d9_device_reset(struct d3d9_device *device,
     unsigned int i;
     HRESULT hr;
 
+    TRACE("reset begin: extended %#x, windowed %#x, backbuffer %ux%u, format %#x, count %u, flags %#lx, swap_effect %#x.\n",
+            device->d3d_parent->extended, present_parameters->Windowed,
+            present_parameters->BackBufferWidth, present_parameters->BackBufferHeight,
+            present_parameters->BackBufferFormat, present_parameters->BackBufferCount,
+            present_parameters->Flags, present_parameters->SwapEffect);
+
     if (!extended && device->device_state == D3D9_DEVICE_STATE_LOST)
     {
         WARN("App not active, returning D3DERR_DEVICELOST.\n");
@@ -1173,6 +1199,29 @@ static HRESULT d3d9_device_reset(struct d3d9_device *device,
 
     wined3d_swapchain_get_desc(d3d9_swapchain->wined3d_swapchain, &old_swapchain_desc);
 
+    TRACE("old swapchain: windowed %#x, backbuffer %ux%u, format %#x, count %u.\n",
+            old_swapchain_desc.windowed, old_swapchain_desc.backbuffer_width,
+            old_swapchain_desc.backbuffer_height, old_swapchain_desc.backbuffer_format,
+            old_swapchain_desc.backbuffer_count);
+
+    /* A few legacy engines call Reset immediately after creating their first
+     * window, while retaining a wrapper for the implicit back buffer.  The
+     * native D3D9 driver accepts this transition, but the OpenGL swapchain on
+     * macOS can fault while replacing its drawable.  Keep the existing
+     * swapchain alive in Madeira-SE and report success; the window compositor
+     * continues to present the already-created drawable. */
+    if (!extended && d3d9_madeira_soft_reset_enabled())
+    {
+        TRACE("Madeira-SE soft Reset: retaining the existing swapchain.\n");
+        present_parameters->BackBufferWidth = old_swapchain_desc.backbuffer_width;
+        present_parameters->BackBufferHeight = old_swapchain_desc.backbuffer_height;
+        present_parameters->BackBufferFormat = d3dformat_from_wined3dformat(old_swapchain_desc.backbuffer_format);
+        present_parameters->BackBufferCount = old_swapchain_desc.backbuffer_count;
+        device->device_state = D3D9_DEVICE_STATE_OK;
+        wined3d_mutex_unlock();
+        return D3D_OK;
+    }
+
     /* wined3d_device_reset() may recreate swapchain textures.
      *
      * If the device is not extended, we don't need to remove the reference to
@@ -1206,8 +1255,15 @@ static HRESULT d3d9_device_reset(struct d3d9_device *device,
         }
     }
 
-    if (SUCCEEDED(hr = wined3d_device_reset(device->wined3d_device, &swapchain_desc,
-            mode ? &wined3d_mode : NULL, reset_enum_callback, !extended)))
+    TRACE("calling wined3d reset: windowed %#x, backbuffer %ux%u, format %#x, count %u, reset_state %#x.\n",
+            swapchain_desc.windowed, swapchain_desc.backbuffer_width, swapchain_desc.backbuffer_height,
+            swapchain_desc.backbuffer_format, swapchain_desc.backbuffer_count, !extended);
+
+    hr = wined3d_device_reset(device->wined3d_device, &swapchain_desc,
+            mode ? &wined3d_mode : NULL, reset_enum_callback, !extended);
+    TRACE("wined3d reset returned %#lx.\n", hr);
+
+    if (SUCCEEDED(hr))
     {
         struct d3d9_surface *surface;
 
@@ -2433,8 +2489,18 @@ static HRESULT WINAPI d3d9_device_SetViewport(IDirect3DDevice9Ex *iface, const D
 {
     struct d3d9_device *device = impl_from_IDirect3DDevice9Ex(iface);
     struct wined3d_viewport vp;
+    static D3DVIEWPORT9 last_viewport;
 
     TRACE("iface %p, viewport %p.\n", iface, viewport);
+
+    if (d3d9_madeira_diagnostics_enabled()
+            && memcmp(&last_viewport, viewport, sizeof(*viewport)))
+    {
+        ERR("[madeira-d3d9] viewport %lu,%lu %lux%lu z=%g..%g.\n",
+                viewport->X, viewport->Y, viewport->Width, viewport->Height,
+                viewport->MinZ, viewport->MaxZ);
+        last_viewport = *viewport;
+    }
 
     vp.x = viewport->X;
     vp.y = viewport->Y;
@@ -3026,8 +3092,16 @@ static HRESULT WINAPI d3d9_device_GetCurrentTexturePalette(IDirect3DDevice9Ex *i
 static HRESULT WINAPI d3d9_device_SetScissorRect(IDirect3DDevice9Ex *iface, const RECT *rect)
 {
     struct d3d9_device *device = impl_from_IDirect3DDevice9Ex(iface);
+    static RECT last_rect;
 
     TRACE("iface %p, rect %p.\n", iface, rect);
+
+    if (d3d9_madeira_diagnostics_enabled()
+            && memcmp(&last_rect, rect, sizeof(*rect)))
+    {
+        ERR("[madeira-d3d9] scissor %s.\n", wine_dbgstr_rect(rect));
+        last_rect = *rect;
+    }
 
     wined3d_mutex_lock();
     wined3d_stateblock_set_scissor_rect(device->update_state, rect);

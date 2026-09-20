@@ -82,6 +82,21 @@
 WINE_DEFAULT_DEBUG_CHANNEL(bitmap);
 
 
+/* The diagnostic counters used while bringing up the standalone renderer are
+ * intentionally opt-in.  Calling dprintf for every DIB blit is prohibitively
+ * expensive for bitmap-backed visual novels, even when WINEDEBUG disables the
+ * normal Wine debug channels. */
+static BOOL madeira_se_dib_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled == -1)
+        enabled = getenv("MADEIRA_SE_DIB_TRACE") &&
+                  strcmp(getenv("MADEIRA_SE_DIB_TRACE"), "0") != 0;
+    return enabled;
+}
+
+
 static INT DIB_GetObject( HGDIOBJ handle, INT count, LPVOID buffer );
 static BOOL DIB_DeleteObject( HGDIOBJ handle );
 
@@ -637,6 +652,7 @@ INT WINAPI NtGdiStretchDIBitsInternal( HDC hdc, INT xDst, INT yDst, INT widthDst
      * The surface shows a whole panel MOVED by a constant offset with the
      * source left black, so the destination coordinates are the thing to
      * watch. */
+    if (madeira_se_dib_trace_enabled())
     {
         static unsigned n_sdib;
         unsigned n = ++n_sdib;
@@ -906,6 +922,7 @@ INT WINAPI NtGdiSetDIBitsToDeviceInternal( HDC hdc, INT xDest, INT yDest, DWORD 
                                            BOOL xform_coords, HANDLE xform )
 {
     /* iOS-Madeira ml507: see StretchDIBits above. */
+    if (madeira_se_dib_trace_enabled())
     {
         static unsigned n_setdib;
         unsigned n = ++n_setdib;

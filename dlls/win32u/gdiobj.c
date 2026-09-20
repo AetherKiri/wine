@@ -1039,9 +1039,13 @@ void gdi_init(void)
     pthread_mutex_init( &gdi_lock, &attr );
     pthread_mutexattr_destroy( &attr );
 
+    TRACE( "Madeira-SE gdi_init: shared handles\n" );
     init_gdi_shared();
     if (!gdi_shared) return;
 
+    TRACE( "Madeira-SE gdi_init: fonts\n" );
     dpi = font_init();
+    TRACE( "Madeira-SE gdi_init: stock objects at %u dpi\n", dpi );
     init_stock_objects( dpi );
+    TRACE( "Madeira-SE gdi_init: complete\n" );
 }

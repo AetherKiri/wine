@@ -19,6 +19,9 @@
  */
 
 #include <stdarg.h>
+#ifdef MADEIRA_SE_WOW64_HOST
+#include <stdlib.h>
+#endif
 
 #include "ntstatus.h"
 #include "windef.h"
@@ -32,6 +35,137 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
+
+#ifdef MADEIRA_SE_WOW64_HOST
+extern NTSTATUS madeira_se_wow64_get_thread_context( HANDLE handle, WOW64_CONTEXT *context );
+
+#define MADEIRA_ROUND_SIZE(size, align) (((size) + (align) - 1) & ~((align) - 1))
+
+static SIZE_T madeira_environment_size( const WCHAR *environment )
+{
+    const WCHAR *ptr = environment;
+
+    if (!ptr) return 0;
+    while (*ptr)
+    {
+        while (*ptr++) continue;
+    }
+    return (ptr + 1 - environment) * sizeof(*environment);
+}
+
+static void madeira_append_unicode_string( void **data, const UNICODE_STRING *source,
+                                           UNICODE_STRING *destination )
+{
+    destination->Length = source->Length;
+    destination->MaximumLength = source->MaximumLength;
+    if (!source->MaximumLength)
+    {
+        destination->Buffer = NULL;
+        return;
+    }
+    destination->Buffer = *data;
+    memcpy( destination->Buffer, source->Buffer, source->Length );
+    *data = (char *)*data + MADEIRA_ROUND_SIZE( source->MaximumLength, sizeof(void *) );
+}
+
+static RTL_USER_PROCESS_PARAMETERS *madeira_create_process_parameters(
+    const UNICODE_STRING *image, const UNICODE_STRING *dllpath,
+    const UNICODE_STRING *curdir, const UNICODE_STRING *cmdline,
+    WCHAR *environment, const UNICODE_STRING *title,
+    const UNICODE_STRING *desktop, const UNICODE_STRING *shell,
+    const UNICODE_STRING *runtime )
+{
+    SIZE_T environment_size = madeira_environment_size( environment );
+    SIZE_T size = sizeof(RTL_USER_PROCESS_PARAMETERS)
+        + MADEIRA_ROUND_SIZE( image->MaximumLength, sizeof(void *) )
+        + MADEIRA_ROUND_SIZE( dllpath->MaximumLength, sizeof(void *) )
+        + MADEIRA_ROUND_SIZE( curdir->MaximumLength, sizeof(void *) )
+        + MADEIRA_ROUND_SIZE( cmdline->MaximumLength, sizeof(void *) )
+        + MADEIRA_ROUND_SIZE( title->MaximumLength, sizeof(void *) )
+        + MADEIRA_ROUND_SIZE( desktop->MaximumLength, sizeof(void *) )
+        + MADEIRA_ROUND_SIZE( shell->MaximumLength, sizeof(void *) )
+        + MADEIRA_ROUND_SIZE( runtime->MaximumLength, sizeof(void *) );
+    SIZE_T allocation_size = size + MADEIRA_ROUND_SIZE( environment_size, sizeof(void *) );
+    RTL_USER_PROCESS_PARAMETERS *params = calloc( 1, allocation_size );
+    void *data;
+
+    if (!params) return NULL;
+    params->AllocationSize = size;
+    params->Size = size;
+    params->Flags = PROCESS_PARAMS_FLAG_NORMALIZED;
+    params->EnvironmentSize = MADEIRA_ROUND_SIZE( environment_size, sizeof(void *) );
+    data = params + 1;
+    madeira_append_unicode_string( &data, curdir, &params->CurrentDirectory.DosPath );
+    madeira_append_unicode_string( &data, dllpath, &params->DllPath );
+    madeira_append_unicode_string( &data, image, &params->ImagePathName );
+    madeira_append_unicode_string( &data, cmdline, &params->CommandLine );
+    madeira_append_unicode_string( &data, title, &params->WindowTitle );
+    madeira_append_unicode_string( &data, desktop, &params->Desktop );
+    madeira_append_unicode_string( &data, shell, &params->ShellInfo );
+    madeira_append_unicode_string( &data, runtime, &params->RuntimeInfo );
+    if (environment_size) params->Environment = memcpy( data, environment, environment_size );
+    return params;
+}
+
+static NTSTATUS madeira_get_thread_selector_entry( HANDLE handle,
+                                                    THREAD_DESCRIPTOR_INFORMATION *info,
+                                                    ULONG size, ULONG *retlen )
+{
+    WOW64_CONTEXT context = { WOW64_CONTEXT_CONTROL | WOW64_CONTEXT_SEGMENTS };
+    LDT_ENTRY entry = { 0 };
+    DWORD selector;
+
+    if (size != sizeof(*info)) return STATUS_INFO_LENGTH_MISMATCH;
+    if (madeira_se_wow64_get_thread_context( handle, &context ))
+    {
+        context.SegCs = 0x1b;
+        context.SegSs = 0x23;
+        context.SegFs = 0x3b;
+    }
+    selector = info->Selector | 3;
+    if (selector == 0x03) goto done;
+    if (selector & 0x04)
+        return NtQueryInformationThread( handle, ThreadDescriptorTableEntry, info, size, NULL );
+
+    entry.HighWord.Bits.Dpl = 3;
+    entry.HighWord.Bits.Pres = 1;
+    entry.HighWord.Bits.Default_Big = 1;
+    if (selector == context.SegCs)
+    {
+        entry.LimitLow = 0xffff;
+        entry.HighWord.Bits.LimitHi = 0xf;
+        entry.HighWord.Bits.Type = 0x1b;
+        entry.HighWord.Bits.Granularity = 1;
+    }
+    else if (selector == context.SegSs)
+    {
+        entry.LimitLow = 0xffff;
+        entry.HighWord.Bits.LimitHi = 0xf;
+        entry.HighWord.Bits.Type = 0x13;
+        entry.HighWord.Bits.Granularity = 1;
+    }
+    else if (selector == context.SegFs)
+    {
+        THREAD_BASIC_INFORMATION basic;
+
+        entry.LimitLow = 0xfff;
+        entry.HighWord.Bits.Type = 0x13;
+        if (!NtQueryInformationThread( handle, ThreadBasicInformation, &basic, sizeof(basic), NULL ))
+        {
+            ULONG address = PtrToUlong( (char *)basic.TebBaseAddress + 0x2000 );
+            entry.BaseLow = address;
+            entry.HighWord.Bytes.BaseMid = address >> 16;
+            entry.HighWord.Bytes.BaseHi = address >> 24;
+        }
+    }
+    else return STATUS_UNSUCCESSFUL;
+
+done:
+    info->Entry = entry;
+    if (retlen) *retlen = sizeof(entry);
+    return STATUS_SUCCESS;
+}
+#endif
 
 
 static BOOL is_process_wow64( HANDLE handle )
@@ -67,6 +201,20 @@ static RTL_USER_PROCESS_PARAMETERS *process_params_32to64( RTL_USER_PROCESS_PARA
     RTL_USER_PROCESS_PARAMETERS *ret;
 
     *params = NULL;
+#ifdef MADEIRA_SE_WOW64_HOST
+    unicode_str_32to64( &image, &params32->ImagePathName );
+    unicode_str_32to64( &dllpath, &params32->DllPath );
+    unicode_str_32to64( &curdir, &params32->CurrentDirectory.DosPath );
+    unicode_str_32to64( &cmdline, &params32->CommandLine );
+    unicode_str_32to64( &title, &params32->WindowTitle );
+    unicode_str_32to64( &desktop, &params32->Desktop );
+    unicode_str_32to64( &shell, &params32->ShellInfo );
+    unicode_str_32to64( &runtime, &params32->RuntimeInfo );
+    if (!(ret = madeira_create_process_parameters( &image, &dllpath, &curdir, &cmdline,
+                                                   ULongToPtr( params32->Environment ), &title,
+                                                   &desktop, &shell, &runtime )))
+        return NULL;
+#else
     if (RtlCreateProcessParametersEx( &ret, unicode_str_32to64( &image, &params32->ImagePathName ),
                                       unicode_str_32to64( &dllpath, &params32->DllPath ),
                                       unicode_str_32to64( &curdir, &params32->CurrentDirectory.DosPath ),
@@ -78,6 +226,7 @@ static RTL_USER_PROCESS_PARAMETERS *process_params_32to64( RTL_USER_PROCESS_PARA
                                       unicode_str_32to64( &runtime, &params32->RuntimeInfo ),
                                       PROCESS_PARAMS_FLAG_NORMALIZED ))
         return NULL;
+#endif
 
     ret->DebugFlags            = params32->DebugFlags;
     ret->ConsoleHandle         = LongToHandle( params32->ConsoleHandle );
@@ -161,6 +310,9 @@ static PS_ATTRIBUTE_LIST *ps_attributes_32to64( PS_ATTRIBUTE_LIST **attr, const 
                 OBJECT_ATTRIBUTES attr;
                 UNICODE_STRING path;
 
+#ifdef MADEIRA_SE_WOW64_HOST
+                ret->Attributes[i].ValuePtr = ULongToPtr( attr32->Attributes[i].Value );
+#endif
                 path.Length = ret->Attributes[i].Size;
                 path.Buffer = ret->Attributes[i].ValuePtr;
                 InitializeObjectAttributes( &attr, &path, OBJ_CASE_INSENSITIVE, 0, 0 );
@@ -428,7 +580,11 @@ NTSTATUS WINAPI wow64_NtCreateUserProcess( UINT *args )
     put_handle( thread_handle_ptr, thread_handle );
     put_ps_create_info( info32, &info );
     put_ps_attributes( attr32, attr );
+#ifdef MADEIRA_SE_WOW64_HOST
+    free( params );
+#else
     RtlDestroyProcessParameters( params );
+#endif
     return status;
 }
 
@@ -771,7 +927,11 @@ NTSTATUS WINAPI wow64_NtQueryInformationThread( UINT *args )
     }
 
     case ThreadDescriptorTableEntry:  /* THREAD_DESCRIPTOR_INFORMATION */
+#ifdef MADEIRA_SE_WOW64_HOST
+        return madeira_get_thread_selector_entry( handle, ptr, len, retlen );
+#else
         return RtlWow64GetThreadSelectorEntry( handle, ptr, len, retlen );
+#endif
 
     case ThreadWow64Context:  /* WOW64_CONTEXT* */
         return STATUS_INVALID_INFO_CLASS;

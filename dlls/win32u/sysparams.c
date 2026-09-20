@@ -26,6 +26,7 @@
 
 #include <pthread.h>
 #include <assert.h>
+#include <stdlib.h>
 
 #include "ntstatus.h"
 #include "ntgdi_private.h"
@@ -3340,9 +3341,25 @@ RECT get_virtual_screen_rect( UINT dpi, MONITOR_DPI_TYPE type )
 {
     RECT rect = {0};
 
-    if (!lock_display_devices( FALSE )) return rect;
+    /* Madeira-SE runs the application without starting explorer.exe.  In
+     * that mode a process can reach the first window-position calculation
+     * before Wine's normal display-device transaction has a monitor to
+     * expose.  Returning an empty desktop makes perfectly valid applications
+     * center their main window at negative coordinates (and therefore appear
+     * to have no window).  Keep the service-style virtual monitor as a
+     * deterministic fallback until the native display cache is available. */
+    if (!lock_display_devices( FALSE ))
+    {
+        if (getenv( "MADEIRA_SE_NO_DESKTOP" ) && !getenv( "WINEBOOTSTRAPMODE" ))
+            return monitor_get_rect( &virtual_monitor, dpi, type );
+        return rect;
+    }
     rect = monitors_get_union_rect( dpi, type );
     unlock_display_devices();
+
+    if (IsRectEmpty( &rect ) && getenv( "MADEIRA_SE_NO_DESKTOP" ) &&
+        !getenv( "WINEBOOTSTRAPMODE" ))
+        rect = monitor_get_rect( &virtual_monitor, dpi, type );
 
     return rect;
 }
@@ -3386,7 +3403,12 @@ RECT get_primary_monitor_rect( UINT dpi )
     struct monitor *monitor;
     RECT rect = {0};
 
-    if (!lock_display_devices( FALSE )) return rect;
+    if (!lock_display_devices( FALSE ))
+    {
+        if (getenv( "MADEIRA_SE_NO_DESKTOP" ) && !getenv( "WINEBOOTSTRAPMODE" ))
+            return monitor_get_rect( &virtual_monitor, dpi, MDT_DEFAULT );
+        return rect;
+    }
 
     LIST_FOR_EACH_ENTRY( monitor, &monitors, struct monitor, entry )
     {
@@ -3396,6 +3418,11 @@ RECT get_primary_monitor_rect( UINT dpi )
     }
 
     unlock_display_devices();
+
+    if (IsRectEmpty( &rect ) && getenv( "MADEIRA_SE_NO_DESKTOP" ) &&
+        !getenv( "WINEBOOTSTRAPMODE" ))
+        rect = monitor_get_rect( &virtual_monitor, dpi, MDT_DEFAULT );
+
     return rect;
 }
 

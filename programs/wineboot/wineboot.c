@@ -1526,11 +1526,16 @@ static HANDLE start_rundll32( const WCHAR *inf_path, const WCHAR *install, WORD 
     memset( &si, 0, sizeof(si) );
     si.cb = sizeof(si);
 
-    if (!GetSystemWow64Directory2W( app, MAX_PATH, machine )) return 0;
+    /* An architecture-isolated x86-64 Madeira prefix has no WoW64 directory
+     * for its own machine.  Use system32 in that case; i386 still resolves to
+     * syswow64 through GetSystemWow64Directory2W. */
+    if (!GetSystemWow64Directory2W( app, MAX_PATH, machine ) &&
+        !GetSystemDirectoryW( app, MAX_PATH )) return 0;
     lstrcatW( app, L"\\rundll32.exe" );
     TRACE( "machine %x starting %s\n", machine, debugstr_w(app) );
 
-    len = lstrlenW(app) + ARRAY_SIZE(L" setupapi,InstallHinfSection DefaultInstall 128 ") + lstrlenW(inf_path);
+    len = lstrlenW(app) + lstrlenW(install) +
+          ARRAY_SIZE(L" setupapi,InstallHinfSection  128 ") + lstrlenW(inf_path);
 
     if (!(buffer = malloc( len * sizeof(WCHAR) ))) return 0;
     swprintf( buffer, len, L"%s setupapi,InstallHinfSection %s 128 %s", app, install, inf_path );
@@ -1634,7 +1639,23 @@ static void update_user_profile(void)
 }
 
 /* execute rundll32 on the wine.inf file if necessary */
-static void update_wineprefix( BOOL force )
+static void wait_setup_process( HANDLE process, HWND wait_window )
+{
+    if (!wait_window)
+    {
+        WaitForSingleObject( process, INFINITE );
+    }
+    else for (;;)
+    {
+        MSG msg;
+        DWORD res = MsgWaitForMultipleObjects( 1, &process, FALSE, INFINITE, QS_ALLINPUT );
+        if (res == WAIT_OBJECT_0) break;
+        while (PeekMessageW( &msg, 0, 0, 0, PM_REMOVE )) DispatchMessageW( &msg );
+    }
+    CloseHandle( process );
+}
+
+static void update_wineprefix( BOOL force, BOOL headless, WORD guest_machine )
 {
     const WCHAR *config_dir = _wgetenv( L"WINECONFIGDIR" );
     WCHAR *inf_path = get_wine_inf_path();
@@ -1660,32 +1681,30 @@ static void update_wineprefix( BOOL force )
         HANDLE process;
         DWORD count = 0;
 
-        if ((process = start_rundll32( inf_path, L"PreInstall", IMAGE_FILE_MACHINE_TARGET_HOST )))
+        WORD preinstall_machine = guest_machine ? guest_machine : IMAGE_FILE_MACHINE_TARGET_HOST;
+
+        if ((process = start_rundll32( inf_path, L"PreInstall", preinstall_machine )))
         {
-            HWND hwnd = show_wait_window();
-            for (;;)
+            HWND hwnd = headless ? 0 : show_wait_window();
+
+            wait_setup_process( process, hwnd );
+            if (guest_machine)
             {
-                if (process)
-                {
-                    MSG msg;
-                    DWORD res = MsgWaitForMultipleObjects( 1, &process, FALSE, INFINITE, QS_ALLINPUT );
-                    if (res != WAIT_OBJECT_0)
-                    {
-                        while (PeekMessageW( &msg, 0, 0, 0, PM_REMOVE )) DispatchMessageW( &msg );
-                        continue;
-                    }
-                    CloseHandle( process );
-                }
-                if (!machines[count].Machine) break;
+                const WCHAR *install = headless ? L"MadeiraSEInstall" : L"DefaultInstall";
+                if ((process = start_rundll32( inf_path, install, guest_machine )))
+                    wait_setup_process( process, hwnd );
+            }
+            else while (machines[count].Machine)
+            {
                 if (machines[count].Native)
                     process = start_rundll32( inf_path, L"DefaultInstall", IMAGE_FILE_MACHINE_TARGET_HOST );
-                else
-                    process = start_rundll32( inf_path, L"Wow64Install", machines[count].Machine );
+                else process = start_rundll32( inf_path, L"Wow64Install", machines[count].Machine );
                 count++;
+                if (process) wait_setup_process( process, hwnd );
             }
-            DestroyWindow( hwnd );
+            if (hwnd) DestroyWindow( hwnd );
         }
-        install_root_pnp_devices();
+        if (!headless) install_root_pnp_devices();
         update_user_profile();
 
         TRACE( "wine: configuration in %s has been updated.\n", debugstr_w(prettyprint_configdir()) );
@@ -1798,13 +1817,29 @@ int __cdecl main( int argc, char *argv[] )
     UNICODE_STRING nameW = RTL_CONSTANT_STRING( L"\\KernelObjects\\__wineboot_event" );
     HANDLE process = 0;
     BOOL is_wow64;
+    BOOL no_desktop = GetEnvironmentVariableW( L"MADEIRA_SE_NO_DESKTOP", NULL, 0 ) != 0;
+    WCHAR madeira_guest_arch[16];
+    BOOL madeira_guest = GetEnvironmentVariableW( L"MADEIRA_SE_GUEST_ARCH",
+                                                   madeira_guest_arch,
+                                                   ARRAY_SIZE(madeira_guest_arch) ) != 0;
+    WORD madeira_guest_machine = 0;
+
+    if (madeira_guest)
+    {
+        if (!wcsicmp( madeira_guest_arch, L"i386" )) madeira_guest_machine = IMAGE_FILE_MACHINE_I386;
+        else if (!wcsicmp( madeira_guest_arch, L"x86_64" )) madeira_guest_machine = IMAGE_FILE_MACHINE_AMD64;
+    }
 
     end_session = force = init = kill = restart = shutdown = update = FALSE;
     GetWindowsDirectoryW( windowsdir, MAX_PATH );
     if( !SetCurrentDirectoryW( windowsdir ) )
         WINE_ERR("Cannot set the dir to %s (%ld)\n", wine_dbgstr_w(windowsdir), GetLastError() );
 
-    if (IsWow64Process( GetCurrentProcess(), &is_wow64 ) && is_wow64)
+    /* Madeira-SE bootstraps architecture-isolated guest prefixes.  The host
+     * is ARM64, so Wine reports both i386 and x86-64 guests as WoW64 even
+     * though the running image already has the requested guest architecture.
+     * Restarting through an uninitialized system32 would fail or recurse. */
+    if (!madeira_guest && IsWow64Process( GetCurrentProcess(), &is_wow64 ) && is_wow64)
     {
         STARTUPINFOW si;
         PROCESS_INFORMATION pi;
@@ -1892,22 +1927,28 @@ int __cdecl main( int argc, char *argv[] )
     pendingRename();
 
     ProcessWindowsFileProtection();
-    ProcessRunKeys( HKEY_LOCAL_MACHINE, L"RunServicesOnce", TRUE, FALSE );
+    if (!no_desktop) ProcessRunKeys( HKEY_LOCAL_MACHINE, L"RunServicesOnce", TRUE, FALSE );
 
     if (init || (kill && !restart))
     {
-        ProcessRunKeys( HKEY_LOCAL_MACHINE, L"RunServices", FALSE, FALSE );
-        start_services_process();
+        if (!no_desktop)
+        {
+            ProcessRunKeys( HKEY_LOCAL_MACHINE, L"RunServices", FALSE, FALSE );
+            start_services_process();
+        }
     }
-    if (init || update) update_wineprefix( update );
+    /* Register the normal Wine COM classes and system configuration even for
+     * a direct executable launch.  Headless mode runs only the active guest
+     * architecture and waits without creating Wine's setup progress window. */
+    if (init || update) update_wineprefix( update, no_desktop, madeira_guest_machine );
 
     create_volatile_environment_registry_key();
     create_known_dlls();
     initialize_internet();
 
-    ProcessRunKeys( HKEY_LOCAL_MACHINE, L"RunOnce", TRUE, TRUE );
+    if (!no_desktop) ProcessRunKeys( HKEY_LOCAL_MACHINE, L"RunOnce", TRUE, TRUE );
 
-    if (!init && !restart)
+    if (!no_desktop && !init && !restart)
     {
         ProcessRunKeys( HKEY_LOCAL_MACHINE, L"Run", FALSE, FALSE );
         ProcessRunKeys( HKEY_CURRENT_USER, L"Run", FALSE, FALSE );

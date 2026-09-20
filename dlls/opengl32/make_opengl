@@ -522,7 +522,12 @@ sub generate_unix_thunk($$$$)
             }
             elsif ($arg_type =~ /(sizei|int)ptr/)
             {
-                $call_args .= " (" . $arg_type . ")ULongToPtr(params->$pname),";
+                # GL{size,}iptr is an integer-sized value, not a guest
+                # pointer.  ULongToPtr() applies Madeira's WoW64 address
+                # bias and turns ordinary sizes (for example 0x80000) into
+                # host addresses.  Sign-extend the original 32-bit value
+                # while widening it to the native Unix type instead.
+                $call_args .= " (" . $arg_type . ")madeira_se_wow64_widen_integer(params->$pname),";
             }
             elsif ($arg_type =~ /GLsync/)
             {
@@ -535,7 +540,18 @@ sub generate_unix_thunk($$$$)
                 $need_lock = 1 if $arg_type =~ /GLsync/;
             }
         }
-        $call_args .= " UlongToHandle( params->ret )," if $func_ret =~ /HPBUFFERARB|HGLRC|GLsync/;
+        if ($func_ret =~ /GLsync/)
+        {
+            # GLsync is a pointer to the client-side wrapper allocated by
+            # wgl.c.  On the biased WoW64 address space it must be translated
+            # like any other guest pointer before the Unix wrapper writes the
+            # native GLsync handle into it.
+            $call_args .= " ULongToPtr( params->ret ),";
+        }
+        elsif ($func_ret =~ /HPBUFFERARB|HGLRC/)
+        {
+            $call_args .= " UlongToHandle( params->ret ),";
+        }
         if (!is_void_func($func))
         {
             my $ret_type = get_arg_type( $func->[0] );
@@ -1795,6 +1811,7 @@ print OUT "#include \"wingdi.h\"\n\n";
 
 print OUT "#include \"unixlib.h\"\n";
 print OUT "#include \"unix_private.h\"\n\n";
+print OUT "#include \"wine/madeira_se.h\"\n";
 print OUT "#include \"wine/debug.h\"\n\n";
 
 print OUT "WINE_DEFAULT_DEBUG_CHANNEL(opengl);\n\n";

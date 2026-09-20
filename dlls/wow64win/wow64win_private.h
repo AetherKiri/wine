@@ -24,6 +24,14 @@
 #include "../win32u/win32syscalls.h"
 #include "ntuser.h"
 
+#if defined(MADEIRA_SE_WOW64WIN_HOST) && defined(__APPLE__) && defined(__aarch64__)
+#include "wine/madeira_se.h"
+#undef ULongToPtr
+#define ULongToPtr(value) madeira_se_wow64_guest_to_host( (ULONG)(value) )
+#undef UIntToPtr
+#define UIntToPtr(value) madeira_se_wow64_guest_to_host( (UINT)(value) )
+#endif
+
 #define SYSCALL_ENTRY(id,name,_args) extern NTSTATUS WINAPI wow64_ ## name( UINT *args );
 ALL_SYSCALLS32
 #undef SYSCALL_ENTRY

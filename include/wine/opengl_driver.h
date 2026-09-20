@@ -67,9 +67,44 @@ struct opengl_client_context
     GLenum                      last_error;
 };
 
+#ifdef WINE_UNIX_LIB
+
+/*
+ * Native arm64 Madeira-SE keeps PE32 client objects in a biased guest
+ * address space.  OpenGL Unix entry points receive those pointers through a
+ * WoW64 thunk, so translate them before following the client object header.
+ * Keeping the conversion here makes context and pbuffer lookups consistent.
+ */
+# if defined(__APPLE__) && defined(__aarch64__)
+#  include "wine/madeira_se.h"
+static inline void *opengl_client_pointer_from_guest( const void *pointer )
+{
+    uintptr_t value = (uintptr_t)pointer;
+
+    if (value && sizeof(void *) > sizeof(int) && NtCurrentTeb()->WowTebOffset && value < (1ULL << 32))
+        return madeira_se_wow64_guest_to_host( (uint32_t)value );
+    return (void *)pointer;
+}
+# else
+static inline void *opengl_client_pointer_from_guest( const void *pointer )
+{
+    return (void *)pointer;
+}
+# endif
+
+#else
+
+static inline void *opengl_client_pointer_from_guest( const void *pointer )
+{
+    return (void *)pointer;
+}
+
+#endif
+
 static inline struct opengl_client_context *opengl_client_context_from_client( HGLRC client_context )
 {
-    return CONTAINING_RECORD( client_context, struct opengl_client_context, obj );
+    return CONTAINING_RECORD( opengl_client_pointer_from_guest( client_context ),
+                              struct opengl_client_context, obj );
 }
 
 struct opengl_client_pbuffer
@@ -81,7 +116,8 @@ struct opengl_client_pbuffer
 
 static inline struct opengl_client_pbuffer *opengl_client_pbuffer_from_client( HPBUFFERARB client_pbuffer )
 {
-    return CONTAINING_RECORD( client_pbuffer, struct opengl_client_pbuffer, obj );
+    return CONTAINING_RECORD( opengl_client_pointer_from_guest( client_pbuffer ),
+                              struct opengl_client_pbuffer, obj );
 }
 
 /* client-side opengl sync */

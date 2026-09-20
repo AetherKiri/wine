@@ -642,6 +642,13 @@ This is an error since --enable-archs=$wine_arch was requested.])])
 
 done
 
+case "$host_os/$HOST_ARCH" in
+  darwin*/aarch64)
+    aarch64_EXTRACFLAGS="$aarch64_EXTRACFLAGS -DMADEIRA_SE_DARWIN_ARM64"
+    arm64ec_EXTRACFLAGS="$arm64ec_EXTRACFLAGS -DMADEIRA_SE_DARWIN_ARM64"
+    ;;
+esac
+
 CC=$saved_CC
 CFLAGS=$saved_CFLAGS
 CPPFLAGS=$saved_CPPFLAGS
@@ -938,7 +945,13 @@ case $host_os in
     AC_SUBST(SECURITY_LIBS,"-framework Security -framework CoreFoundation")
     AC_SUBST(SYSTEMCONFIGURATION_LIBS,"-framework SystemConfiguration")
 
-    WINELOADER_LDFLAGS="-Wl,-segalign,0x1000,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist"
+    dnl Apple Silicon requires the native 16K Mach-O segment layout and the
+    dnl platform default 4GB __PAGEZERO.  The 4K/4K layout below is valid for
+    dnl Intel Wine launchers but arm64 macOS kills it before main().
+    case $HOST_ARCH in
+      aarch64) WINELOADER_LDFLAGS="-Wl,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist" ;;
+      *)       WINELOADER_LDFLAGS="-Wl,-segalign,0x1000,-pagezero_size,0x1000,-sectcreate,__TEXT,__info_plist,loader/wine_info.plist" ;;
+    esac
 
     case $HOST_ARCH in
       i386) wine_use_preloader=yes ;;
@@ -2385,11 +2398,13 @@ then
     enable_wow64=${enable_wow64:-aarch64,x86_64}
     enable_wow64win=${enable_wow64win:-aarch64,x86_64}
     enable_wow64cpu=${enable_wow64cpu:-x86_64}
+    enable_madeiracpu=${enable_madeiracpu:-aarch64}
     enable_xtajit64=${enable_xtajit64:-arm64ec}
 else
     enable_wow64=${enable_wow64:-no}
     enable_wow64win=${enable_wow64win:-no}
     enable_wow64cpu=${enable_wow64cpu:-no}
+    enable_madeiracpu=${enable_madeiracpu:-no}
     enable_xtajit64=${enable_xtajit64:-no}
     enable_compiler_rt=${enable_compiler_rt:-no}
 fi
@@ -3490,6 +3505,7 @@ WINE_CONFIG_MAKEFILE(dlls/xmllite/tests)
 WINE_CONFIG_MAKEFILE(dlls/xolehlp)
 WINE_CONFIG_MAKEFILE(dlls/xpsprint)
 WINE_CONFIG_MAKEFILE(dlls/xpssvcs)
+WINE_CONFIG_MAKEFILE(dlls/madeiracpu)
 WINE_CONFIG_MAKEFILE(dlls/xtajit64)
 WINE_CONFIG_MAKEFILE(fonts)
 WINE_CONFIG_MAKEFILE(include)

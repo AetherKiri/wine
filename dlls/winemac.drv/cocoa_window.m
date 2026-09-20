@@ -25,6 +25,8 @@
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
 #include <dlfcn.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #import "cocoa_window.h"
 
@@ -3734,8 +3736,9 @@ macdrv_view macdrv_create_view(CGRect rect)
 
     OnMainThread(^{
         NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+        NSRect frame = NSRectFromCGRect(cgrect_mac_from_win(rect));
 
-        view = [[WineContentView alloc] initWithFrame:NSRectFromCGRect(cgrect_mac_from_win(rect))];
+        view = [[WineContentView alloc] initWithFrame:frame];
         [view setAutoresizingMask:NSViewNotSizable];
         [view setHidden:YES];
 #pragma clang diagnostic push
@@ -3750,6 +3753,14 @@ macdrv_view macdrv_create_view(CGRect rect)
                selector:@selector(updateGLContexts)
                    name:NSApplicationDidChangeScreenParametersNotification
                  object:NSApp];
+
+        if (getenv("MADEIRA_SE_D3D9_DIAGNOSTICS"))
+            fprintf(stderr, "[madeira-macdrv] create Cocoa view=%p win=(%.0f,%.0f %.0fx%.0f) "
+                    "frame=(%.0f,%.0f %.0fx%.0f) retina=%d best=%d scale=%.3f\n",
+                    view, rect.origin.x, rect.origin.y, rect.size.width, rect.size.height,
+                    frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+                    retina_on, view.wantsBestResolutionOpenGLSurface,
+                    view.window ? view.window.backingScaleFactor : 0.0);
     });
 
     return (macdrv_view)view;
@@ -3801,6 +3812,14 @@ void macdrv_set_view_frame(macdrv_view v, CGRect rect)
     OnMainThreadAsync(^{
         NSRect newFrame = NSRectFromCGRect(cgrect_mac_from_win(rect));
         NSRect oldFrame = [view frame];
+
+        if (getenv("MADEIRA_SE_D3D9_DIAGNOSTICS") && !NSEqualRects(oldFrame, newFrame))
+            fprintf(stderr, "[madeira-macdrv] frame Cocoa view=%p win=(%.0f,%.0f %.0fx%.0f) "
+                    "old=(%.0f,%.0f %.0fx%.0f) new=(%.0f,%.0f %.0fx%.0f) retina=%d\n",
+                    view, rect.origin.x, rect.origin.y, rect.size.width, rect.size.height,
+                    oldFrame.origin.x, oldFrame.origin.y, oldFrame.size.width, oldFrame.size.height,
+                    newFrame.origin.x, newFrame.origin.y, newFrame.size.width, newFrame.size.height,
+                    retina_on);
 
         if (!NSEqualRects(oldFrame, newFrame))
         {

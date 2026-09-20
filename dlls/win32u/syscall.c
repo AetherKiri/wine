@@ -34,6 +34,11 @@
 #include "wine/unixlib.h"
 #include "win32syscalls.h"
 
+#if defined(__aarch64__) && defined(__APPLE__)
+extern void madeira_se_wow64win_register(void);
+extern BOOL madeira_se_wow64_runtime_active(void);
+#endif
+
 ULONG_PTR zero_bits = 0;
 
 #if defined(__aarch64__) && defined(__APPLE__)
@@ -181,5 +186,8 @@ NTSTATUS __wine_unix_lib_init(void)
 #endif
     KeAddSystemServiceTable( syscalls, NULL, ARRAY_SIZE(syscalls), arguments, 1 );
     ntdll_add_syscall_debug_info( 1, syscall_names, usercall_names );
+#if defined(__aarch64__) && defined(__APPLE__)
+    if (madeira_se_wow64_runtime_active()) madeira_se_wow64win_register();
+#endif
     return STATUS_SUCCESS;
 }

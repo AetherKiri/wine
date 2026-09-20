@@ -39,10 +39,12 @@
 #include "kernel_private.h"
 
 #include "wine/debug.h"
+#include "wine/madeira_se.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
 
-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+static const struct _KUSER_SHARED_DATA *user_shared_data =
+    (const struct _KUSER_SHARED_DATA *)(ULONG_PTR)MADEIRA_SE_USER_SHARED_DATA_ADDRESS;
 
 
 static void get_create_object_attributes( OBJECT_ATTRIBUTES *attr, UNICODE_STRING *nameW,

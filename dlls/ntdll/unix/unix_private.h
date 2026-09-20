@@ -94,6 +94,12 @@ static inline BOOL is_old_wow64(void)
 
 static inline BOOL is_arm64ec(void)
 {
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    /* Madeira-SE interprets AMD64 PE code through TCTI.  It must not enter
+     * Wine's ARM64EC loader or inspect an EC code bitmap. */
+    if (main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64 &&
+        getenv( "MADEIRA_SE_GUEST_BUILD_DIR" )) return FALSE;
+#endif
     return (current_machine == IMAGE_FILE_MACHINE_ARM64 &&
             main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64);
 }

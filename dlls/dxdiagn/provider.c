@@ -37,9 +37,26 @@
 #include "wbemcli.h"
 #include "dsound.h"
 
+#include <string.h>
+
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(dxdiag);
+
+/* Madeira-SE starts the application directly and deliberately skips Wine's
+ * desktop/bootstrap transaction.  In that mode legacy games only need the
+ * DxDiag_SystemInfo version fields; probing every optional display, audio and
+ * DirectShow provider would recreate the skipped transaction and can touch a
+ * renderer before the game has created its own window. */
+static BOOL dxdiag_madeira_compat_enabled(void)
+{
+    char value[8];
+    DWORD length;
+
+    length = GetEnvironmentVariableA("MADEIRA_SE_DXDIAG_COMPAT", value,
+            sizeof(value));
+    return length && (!strcmp(value, "1") || !strcmp(value, "true"));
+}
 
 static HRESULT build_information_tree(IDxDiagContainerImpl_Container **pinfo_root);
 static void free_information_tree(IDxDiagContainerImpl_Container *node);
@@ -742,7 +759,10 @@ static HRESULT build_systeminfo_tree(IDxDiagContainerImpl_Container *node)
     if (FAILED(hr))
         return hr;
 
-    hr = fill_processor_information(node);
+    if (dxdiag_madeira_compat_enabled())
+        hr = add_bstr_property(node, L"szProcessorEnglish", L"Madeira-SE compatible processor");
+    else
+        hr = fill_processor_information(node);
     if (FAILED(hr))
         return hr;
 
@@ -1872,13 +1892,18 @@ static HRESULT build_information_tree(IDxDiagContainerImpl_Container **pinfo_roo
     };
 
     IDxDiagContainerImpl_Container *info_root;
-    size_t index;
+    size_t index, child_count;
 
     info_root = allocate_information_node(NULL);
     if (!info_root)
         return E_OUTOFMEMORY;
 
-    for (index = 0; index < ARRAY_SIZE(root_children); index++)
+    /* A direct Madeira-SE launch does not need the optional DxDiag display,
+     * sound and DirectShow trees.  Building those trees would initialize
+     * DirectDraw/OpenGL while the title is still in its capability probe.
+     * Keep the complete upstream tree for normal Wine prefixes. */
+    child_count = dxdiag_madeira_compat_enabled() ? 1 : ARRAY_SIZE(root_children);
+    for (index = 0; index < child_count; index++)
     {
         IDxDiagContainerImpl_Container *node;
         HRESULT hr;

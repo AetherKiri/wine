@@ -28,6 +28,7 @@
 #include "rtlsupportapi.h"
 #include "wow64win_private.h"
 
+#ifndef MADEIRA_SE_WOW64WIN_HOST
 static void DECLSPEC_NORETURN stub_syscall( const char *name )
 {
     EXCEPTION_RECORD record;
@@ -43,6 +44,16 @@ static void DECLSPEC_NORETURN stub_syscall( const char *name )
 }
 
 #define SYSCALL_STUB(name) NTSTATUS WINAPI wow64_ ## name( UINT *args ) { stub_syscall( #name ); }
+#else
+static NTSTATUS stub_syscall( const char *name )
+{
+    (void)name;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+#define SYSCALL_STUB(name) NTSTATUS WINAPI wow64_ ## name( UINT *args ) \
+    { (void)args; return stub_syscall( #name ); }
+#endif
 ALL_SYSCALL_STUBS
 
 static void * const win32_syscalls[] =
@@ -68,6 +79,7 @@ const SYSTEM_SERVICE_TABLE sdwhwin32 =
 };
 
 
+#ifndef MADEIRA_SE_WOW64WIN_HOST
 BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
 {
     if (reason != DLL_PROCESS_ATTACH) return TRUE;
@@ -75,3 +87,12 @@ BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
     NtCurrentTeb()->Peb->KernelCallbackTable = user_callbacks;
     return TRUE;
 }
+#else
+extern void madeira_se_wow64_set_win32_syscall_table( const SYSTEM_SERVICE_TABLE *table );
+
+DECLSPEC_EXPORT void madeira_se_wow64win_register(void)
+{
+    madeira_se_wow64_set_win32_syscall_table( &sdwhwin32 );
+    NtCurrentTeb()->Peb->KernelCallbackTable = user_callbacks;
+}
+#endif

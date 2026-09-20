@@ -77,7 +77,10 @@ static inline GLsync get_unix_sync( GLsync sync )
 
 static inline void *copy_wow64_ptr32s( UINT_PTR address, ULONG count )
 {
-    ULONG *ptrs = (ULONG *)address;
+    /* The array address itself is still a PE32 guest pointer when this
+     * helper is called from a WoW64 Unix thunk.  Convert it before reading
+     * the element pointers; each element is converted below as well. */
+    ULONG *ptrs = ULongToPtr( address );
     void **tmp;
 
     if (!ptrs || !(tmp = calloc( count, sizeof(*tmp) ))) return NULL;

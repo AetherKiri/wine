@@ -19,7 +19,6 @@
  */
 
 #include <stdarg.h>
-
 #include "ntstatus.h"
 #include "windef.h"
 #include "winbase.h"
@@ -28,6 +27,11 @@
 #include "shlobj.h"
 #include "wow64win_private.h"
 #include "wine/debug.h"
+
+#ifdef MADEIRA_SE_WOW64WIN_HOST
+#define wcslen(str) ((size_t)lstrlenW( (const WCHAR *)(str) ))
+#define wcscpy(dst,src) lstrcpyW( (WCHAR *)(dst), (const WCHAR *)(src) )
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
 
@@ -1666,6 +1670,17 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
 
     switch (code)
     {
+    case NtUserCallHwndParam_ClientToScreen:
+    case NtUserCallHwndParam_GetChildRect:
+    case NtUserCallHwndParam_GetWindowInfo:
+    case NtUserCallHwndParam_GetWindowThread:
+    case NtUserCallHwndParam_ScreenToClient:
+    case NtUserCallHwndParam_SetDialogInfo:
+    case NtUserCallHwndParam_SetMDIClientInfo:
+    case NtUserCallHwndParam_ExposeWindowSurface:
+    case NtUserCallHwndParam_SetRawWindowPos:
+        return NtUserCallHwndParam( hwnd, (UINT_PTR)UlongToPtr( param ), code );
+
     case NtUserCallHwndParam_GetScrollInfo:
         {
             struct
@@ -1695,6 +1710,20 @@ NTSTATUS WINAPI wow64_NtUserCallHwndParam( UINT *args )
         }
 
     case NtUserCallHwndParam_GetClientRect:
+        {
+            struct
+            {
+                ULONG rect;
+                UINT dpi;
+            } *params32 = UlongToPtr( param );
+            struct get_window_rects_params params;
+
+            params.rect = UlongToPtr( params32->rect );
+            params.dpi = params32->dpi;
+            return NtUserCallHwndParam( hwnd, (UINT_PTR)&params, code );
+        }
+
+    case NtUserCallHwndParam_GetPresentRect:
         {
             struct
             {
@@ -1781,6 +1810,16 @@ NTSTATUS WINAPI wow64_NtUserCallOneParam( UINT *args )
     ULONG_PTR arg = get_ulong( &args );
     ULONG code = get_ulong( &args );
 
+    switch (code)
+    {
+    case NtUserCallOneParam_GetPrimaryMonitorRect:
+    case NtUserCallOneParam_D3DKMTOpenAdapterFromGdiDisplayName:
+    case NtUserCallOneParam_GetAsyncKeyboardState:
+    case NtUserGetDeskPattern:
+        arg = (ULONG_PTR)UlongToPtr( arg );
+        break;
+    }
+
     return NtUserCallOneParam( arg, code );
 }
 
@@ -1792,6 +1831,19 @@ NTSTATUS WINAPI wow64_NtUserCallTwoParam( UINT *args )
 
     switch (code)
     {
+    case NtUserCallTwoParam_GetMonitorInfo:
+    case NtUserCallTwoParam_SetIconParam:
+    case NtUserCallTwoParam_SetIMECompositionRect:
+        return NtUserCallTwoParam( arg1, (ULONG_PTR)UlongToPtr( arg2 ), code );
+
+    case NtUserCallTwoParam_MonitorFromRect:
+    case NtUserCallTwoParam_GetVirtualScreenRect:
+        return NtUserCallTwoParam( (ULONG_PTR)UlongToPtr( arg1 ), arg2, code );
+
+    case NtUserCallTwoParam_AdjustWindowRect:
+        return NtUserCallTwoParam( (ULONG_PTR)UlongToPtr( arg1 ),
+                                   (ULONG_PTR)UlongToPtr( arg2 ), code );
+
     case NtUserCallTwoParam_GetMenuInfo:
         {
             MENUINFO32 *info32 = UlongToPtr( arg2 );
@@ -3404,7 +3456,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
     case WM_CREATE:
         if (lparam)
         {
-            CREATESTRUCT32 *cs32 = (void *)lparam;
+            CREATESTRUCT32 *cs32 = UlongToPtr( (ULONG)lparam );
             CREATESTRUCTW cs;
 
             createstruct_32to64( cs32, &cs );
@@ -3423,9 +3475,19 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         }
         return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
 
+    case WM_GETTEXT:
+        /* lParam is the caller's 32-bit output buffer.  It is not one of the
+         * fixed-size message structures below, so the generic default path
+         * would pass the guest value straight to native win32u.  On the
+         * biased ARM64 address space that would make native memcpy write to a
+         * low, unmapped address. */
+        return NtUserMessageCall( hwnd, msg, wparam,
+                                  (LPARAM)UlongToPtr( (ULONG)lparam ),
+                                  result_info, type, ansi );
+
     case WM_MDICREATE:
         {
-            MDICREATESTRUCT32 *cs32 = (void *)lparam;
+            MDICREATESTRUCT32 *cs32 = UlongToPtr( (ULONG)lparam );
             MDICREATESTRUCTW cs;
 
             cs.szClass = UlongToPtr( cs32->szClass );
@@ -3444,7 +3506,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
     case WM_WINDOWPOSCHANGING:
     case WM_WINDOWPOSCHANGED:
         {
-            WINDOWPOS32 *winpos32 = (void *)lparam;
+            WINDOWPOS32 *winpos32 = UlongToPtr( (ULONG)lparam );
             WINDOWPOS winpos;
 
             winpos_32to64( &winpos, winpos32 );
@@ -3456,7 +3518,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
     case WM_NCCALCSIZE:
         if (wparam)
         {
-            NCCALCSIZE_PARAMS32 *params32 = (void *)lparam;
+            NCCALCSIZE_PARAMS32 *params32 = UlongToPtr( (ULONG)lparam );
             NCCALCSIZE_PARAMS params;
             WINDOWPOS winpos;
 
@@ -3472,11 +3534,12 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
             winpos_64to32( &winpos, UlongToPtr( params32->lppos ));
             return ret;
         }
-        return NtUserMessageCall( hwnd, msg, wparam, lparam, result_info, type, ansi );
+        return NtUserMessageCall( hwnd, msg, wparam,
+                                  (LPARAM)UlongToPtr( (ULONG)lparam ), result_info, type, ansi );
 
     case WM_COMPAREITEM:
         {
-            COMPAREITEMSTRUCT32 *cis32 = (void *)lparam;
+            COMPAREITEMSTRUCT32 *cis32 = UlongToPtr( (ULONG)lparam );
             COMPAREITEMSTRUCT cis;
 
             cis.CtlType    = cis32->CtlType;
@@ -3492,7 +3555,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_DELETEITEM:
         {
-            DELETEITEMSTRUCT32 *dis32 = (void *)lparam;
+            DELETEITEMSTRUCT32 *dis32 = UlongToPtr( (ULONG)lparam );
             DELETEITEMSTRUCT dis;
 
             dis.CtlType  = dis32->CtlType;
@@ -3505,7 +3568,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_MEASUREITEM:
         {
-            MEASUREITEMSTRUCT32 *mis32 = (void *)lparam;
+            MEASUREITEMSTRUCT32 *mis32 = UlongToPtr( (ULONG)lparam );
             MEASUREITEMSTRUCT mis;
 
             mis.CtlType    = mis32->CtlType;
@@ -3526,7 +3589,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_DRAWITEM:
         {
-            DRAWITEMSTRUCT32 *dis32 = (void *)lparam;
+            DRAWITEMSTRUCT32 *dis32 = UlongToPtr( (ULONG)lparam );
             DRAWITEMSTRUCT dis;
 
             dis.CtlType       = dis32->CtlType;
@@ -3546,7 +3609,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_COPYDATA:
         {
-            COPYDATASTRUCT32 *cds32 = (void *)lparam;
+            COPYDATASTRUCT32 *cds32 = UlongToPtr( (ULONG)lparam );
             COPYDATASTRUCT cds;
 
             cds.dwData = cds32->dwData;
@@ -3557,7 +3620,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_HELP:
         {
-            HELPINFO32 *hi32 = (void *)lparam;
+            HELPINFO32 *hi32 = UlongToPtr( (ULONG)lparam );
             HELPINFO hi64;
 
             hi64.cbSize       = sizeof(hi64);
@@ -3572,7 +3635,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
     case WM_GETDLGCODE:
         if (lparam)
         {
-            MSG32 *msg32 = (MSG32 *)lparam;
+            MSG32 *msg32 = UlongToPtr( (ULONG)lparam );
             MSG msg64;
 
             return NtUserMessageCall( hwnd, msg, wparam, (LPARAM)msg_32to64( &msg64, msg32 ),
@@ -3582,7 +3645,7 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
 
     case WM_NEXTMENU:
         {
-            MDINEXTMENU32 *next32 = (void *)lparam;
+            MDINEXTMENU32 *next32 = UlongToPtr( (ULONG)lparam );
             MDINEXTMENU next;
 
             next.hmenuIn   = LongToHandle( next32->hmenuIn );
@@ -3599,13 +3662,13 @@ static LRESULT message_call_32to64( HWND hwnd, UINT msg, WPARAM wparam, LPARAM l
         {
             PAINTSTRUCT ps;
 
-            paintstruct_32to64( &ps, (PAINTSTRUCT32 *)lparam );
+            paintstruct_32to64( &ps, UlongToPtr( (ULONG)lparam ));
             return NtUserMessageCall( hwnd, msg, wparam, (LPARAM)&ps, result_info, type, ansi );
         }
 
     case CB_GETCOMBOBOXINFO:
         {
-            COMBOBOXINFO32 *ci32 = (COMBOBOXINFO32 *)lparam;
+            COMBOBOXINFO32 *ci32 = UlongToPtr( (ULONG)lparam );
             COMBOBOXINFO ci;
 
             ci.cbSize      = ci32->cbSize;

@@ -87,6 +87,7 @@
 #include "winternl.h"
 #include "ddk/wdm.h"
 #include "wine/list.h"
+#include "wine/madeira_se.h"
 #include "wine/rbtree.h"
 #include "unix_private.h"
 #include "wine/debug.h"
@@ -200,8 +201,14 @@ static void *host_addr_space_limit;  /* top of the host virtual address space */
 
 static struct file_view *arm64ec_view;
 
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+ULONG_PTR user_space_wow_limit = MADEIRA_SE_WOW64_GUEST_BIAS
+                                + MADEIRA_SE_WOW64_GUEST_SIZE - 1;
+#else
 ULONG_PTR user_space_wow_limit = 0;
-struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+#endif
+struct _KUSER_SHARED_DATA *user_shared_data =
+    (void *)(uintptr_t)MADEIRA_SE_USER_SHARED_DATA_ADDRESS;
 
 /* TEB allocation blocks */
 static void *teb_block;
@@ -1631,23 +1638,56 @@ static void *find_reserved_free_area( void *base, void *end, size_t size, int to
 {
     struct range_entry *range;
     void *start;
+    UINT_PTR base_addr = (UINT_PTR)base;
+    UINT_PTR end_addr = (UINT_PTR)end;
+
+    /* A reserved range can be exhausted.  This is a normal allocation
+     * failure, especially for the biased 32-bit guest arena, so do not turn
+     * it into a process abort through the assertions below. */
+    if (!size || base_addr >= end_addr || base_addr > ~(UINT_PTR)0 - align_mask || end_addr < size)
+        return NULL;
 
     base = ROUND_ADDR( (char *)base + align_mask, align_mask );
     end = (char *)ROUND_ADDR( (char *)end - size, align_mask ) + size;
+    if (base >= end || (char *)end - (char *)base < size) return NULL;
 
     if (top_down)
     {
         start = (char *)end - size;
         range = free_ranges_lower_bound( start );
-        assert(range != free_ranges_end && range->end >= start);
+        /* If start is above the last free range, begin at that last range and
+         * walk down.  lower_bound() intentionally returns free_ranges_end in
+         * this case. */
+        if (range == free_ranges_end)
+        {
+            if (range == free_ranges) return NULL;
+            range--;
+            if (range->end < range->base || (char *)range->end - (char *)range->base < size)
+                start = NULL;
+            else
+            {
+                start = (char *)range->end - size;
+                start = ROUND_ADDR( start, align_mask );
+            }
+        }
 
-        if ((char *)range->end - (char *)start < size) start = ROUND_ADDR( (char *)range->end - size, align_mask );
+        if (range->end < range->base || (char *)range->end - (char *)range->base < size)
+            start = NULL;
+        else if ((char *)range->end - (char *)start < size)
+            start = ROUND_ADDR( (char *)range->end - size, align_mask );
         do
         {
+            if (!start) return NULL;
             if (start >= end || start < base || (char *)end - (char *)start < size) return NULL;
             if (start < range->end && start >= range->base && (char *)range->end - (char *)start >= size) break;
             if (--range < free_ranges) return NULL;
-            start = ROUND_ADDR( (char *)range->end - size, align_mask );
+            if (range->end < range->base || (char *)range->end - (char *)range->base < size)
+                start = NULL;
+            else
+            {
+                start = (char *)range->end - size;
+                start = ROUND_ADDR( start, align_mask );
+            }
         }
         while (1);
     }
@@ -1655,7 +1695,9 @@ static void *find_reserved_free_area( void *base, void *end, size_t size, int to
     {
         start = base;
         range = free_ranges_lower_bound( start );
-        assert(range != free_ranges_end && range->end >= start);
+        /* No free range reaches start.  The caller can try another reserved
+         * area or report STATUS_NO_MEMORY. */
+        if (range == free_ranges_end) return NULL;
 
         if (start < range->base) start = ROUND_ADDR( (char *)range->base + align_mask, align_mask );
         do
@@ -1663,6 +1705,7 @@ static void *find_reserved_free_area( void *base, void *end, size_t size, int to
             if (start >= end || start < base || (char *)end - (char *)start < size) return NULL;
             if (start < range->end && start >= range->base && (char *)range->end - (char *)start >= size) break;
             if (++range == free_ranges_end) return NULL;
+            if ((UINT_PTR)range->base > ~(UINT_PTR)0 - align_mask) return NULL;
             start = ROUND_ADDR( (char *)range->base + align_mask, align_mask );
         }
         while (1);
@@ -1933,9 +1976,43 @@ static NTSTATUS get_vprot_flags( DWORD protect, unsigned int *vprot, BOOL image 
  *
  * Wrapper for mprotect, adds PROT_EXEC if forced by force_exec_prot
  */
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+static BOOL madeira_se_interprets_x64_guest(void)
+{
+    static int result = -1;
+
+    if (result == -1)
+    {
+        const char *arch = getenv( "MADEIRA_SE_GUEST_ARCH" );
+
+        result = arch && (!strcmp( arch, "x86_64" ) || !strcmp( arch, "amd64" ));
+    }
+    return result;
+}
+#endif
+
 static inline int mprotect_exec( void *base, size_t size, int unix_prot )
 {
-    if (force_exec_prot && (unix_prot & PROT_READ) && !(unix_prot & PROT_EXEC))
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    uintptr_t start = (uintptr_t)base;
+    uintptr_t arena_start = (uintptr_t)MADEIRA_SE_WOW64_GUEST_BIAS;
+    uintptr_t arena_end = arena_start + (uintptr_t)MADEIRA_SE_WOW64_GUEST_SIZE;
+    BOOL interpreted_guest = madeira_se_interprets_x64_guest() ||
+                             (start >= arena_start && start < arena_end &&
+                              size <= arena_end - start);
+
+    /*
+     * TCTI interprets x86 instructions directly from readable data pages.
+     * Keep VPROT_EXEC in Wine's page metadata, but never ask XNU to make the
+     * selected guest address space executable.  This keeps the host W^X
+     * policy intact and avoids any MAP_JIT or executable-memory entitlement.
+     */
+    if (interpreted_guest) unix_prot &= ~PROT_EXEC;
+#else
+    const BOOL interpreted_guest = FALSE;
+#endif
+
+    if (!interpreted_guest && force_exec_prot && (unix_prot & PROT_READ) && !(unix_prot & PROT_EXEC))
     {
         TRACE( "forcing exec permission on %p-%p\n", base, (char *)base + size - 1 );
         if (!mprotect( base, size, unix_prot | PROT_EXEC )) return 0;
@@ -2680,6 +2757,22 @@ static NTSTATUS allocate_dos_memory( struct file_view **view, unsigned int vprot
     const size_t dosmem_size = 0x110000;
     int unix_prot = get_unix_prot( vprot ) & ~PROT_EXEC;
 
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    if (is_wow64())
+    {
+        void *base = (void *)(uintptr_t)MADEIRA_SE_WOW64_GUEST_BIAS;
+
+        /*
+         * The PE32 DOS area is guest address 0..0x110000.  XNU reserves the
+         * native low 4 GiB, so back it with the corresponding range in the
+         * Madeira arena.  Returning the 4 GiB-aligned host base still becomes
+         * guest address zero when the WoW64 wrapper writes the 32-bit result.
+         */
+        if (find_view_range( base, dosmem_size )) return STATUS_CONFLICTING_ADDRESSES;
+        return map_view( view, base, dosmem_size, 0, vprot, 0, 0, 0 );
+    }
+#endif
+
     /* check for existing view */
 
     if (find_view_range( 0, dosmem_size )) return STATUS_CONFLICTING_ADDRESSES;
@@ -3334,6 +3427,18 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
     BOOL top_down = (image_info->image_charact & IMAGE_FILE_DLL) &&
                     (image_info->image_flags & IMAGE_FLAGS_ImageDynamicallyRelocated);
 
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    if (image_info->machine == IMAGE_FILE_MACHINE_I386)
+    {
+        const ULONG_PTR bias = MADEIRA_SE_WOW64_GUEST_BIAS;
+        const ULONG_PTR guest_end = bias + MADEIRA_SE_WOW64_GUEST_SIZE - 1;
+
+        if (!limit_low || limit_low < bias) limit_low = bias + max( limit_low, (ULONG_PTR)0x10000 );
+        if (!limit_high) limit_high = guest_end;
+        else if (limit_high < bias) limit_high = min( guest_end, bias + limit_high );
+    }
+#endif
+
     limit_low = max( limit_low, (ULONG_PTR)address_space_start );  /* make sure the DOS area remains free */
     if (!limit_high) limit_high = (ULONG_PTR)user_space_limit;
 
@@ -3343,11 +3448,19 @@ static NTSTATUS map_image_view( struct file_view **view_ret, struct pe_image_inf
     {
         base = wine_server_get_ptr( image_info->map_addr );
         if ((ULONG_PTR)base != image_info->map_addr) base = NULL;
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+        if (base && image_info->machine == IMAGE_FILE_MACHINE_I386 && (ULONG_PTR)base < limit_4g)
+            base = (char *)base + MADEIRA_SE_WOW64_GUEST_BIAS;
+#endif
     }
     else
     {
         base = wine_server_get_ptr( image_info->base );
         if ((ULONG_PTR)base != image_info->base) base = NULL;
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+        if (base && image_info->machine == IMAGE_FILE_MACHINE_I386 && (ULONG_PTR)base < limit_4g)
+            base = (char *)base + MADEIRA_SE_WOW64_GUEST_BIAS;
+#endif
     }
     if (base)
     {
@@ -3392,6 +3505,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
     int unix_fd = -1, needs_close;
     int shared_fd = -1, shared_needs_close = 0;
     SIZE_T size = image_info->map_size;
+    ULONG_PTR preferred_base;
     struct file_view *view;
     unsigned int status;
     sigset_t sigset;
@@ -3420,6 +3534,7 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
         }
         SERVER_END_REQ;
     }
+    preferred_base = image_info->map_addr ? image_info->map_addr : image_info->base;
 
     server_enter_uninterrupted_section( &virtual_mutex, &sigset );
 
@@ -3447,6 +3562,15 @@ static NTSTATUS virtual_map_image( HANDLE mapping, void **addr_ptr, SIZE_T *size
             status = wine_server_call( req );
         }
         SERVER_END_REQ;
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+        /* The server compares the host mapping with the PE preferred base.
+         * A biased i386 mapping is at its preferred guest address even though
+         * the native pointer differs by the fixed arena bias. */
+        if (status == STATUS_IMAGE_NOT_AT_BASE && image_info->machine == IMAGE_FILE_MACHINE_I386 &&
+            preferred_base < MADEIRA_SE_WOW64_GUEST_SIZE &&
+            (ULONG_PTR)view->base == MADEIRA_SE_WOW64_GUEST_BIAS + preferred_base)
+            status = STATUS_SUCCESS;
+#endif
     }
     if (NT_SUCCESS(status))
     {
@@ -3678,6 +3802,13 @@ void virtual_init(void)
 
     mmap_init( preload_info ? *preload_info : NULL );
 
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    /* Physical backing for the x86 0..4 GiB address space. */
+    reserve_area( (void *)(uintptr_t)MADEIRA_SE_WOW64_GUEST_BIAS,
+                  (void *)(uintptr_t)(MADEIRA_SE_WOW64_GUEST_BIAS
+                                      + MADEIRA_SE_WOW64_GUEST_SIZE) );
+#endif
+
     if ((preload = getenv("WINEPRELOADRESERVE")))
     {
         unsigned long start, end;
@@ -3767,7 +3898,15 @@ void virtual_get_system_info( SYSTEM_BASIC_INFORMATION *info, BOOL wow64 )
     info->LowestUserAddress       = (void *)0x10000;
     info->ActiveProcessorsAffinityMask = get_system_affinity_mask();
     info->NumberOfProcessors      = peb->NumberOfProcessors;
-    if (wow64) info->HighestUserAddress = (char *)get_wow_user_space_limit() - 1;
+    if (wow64)
+    {
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+        info->HighestUserAddress = (void *)(get_wow_user_space_limit()
+                                            - MADEIRA_SE_WOW64_GUEST_BIAS - 1);
+#else
+        info->HighestUserAddress = (char *)get_wow_user_space_limit() - 1;
+#endif
+    }
     else info->HighestUserAddress = (char *)user_space_limit - 1;
 }
 
@@ -4060,8 +4199,17 @@ TEB *virtual_alloc_first_teb(void)
         exit(1);
     }
 
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    /* Keep the native/guest TEB pair inside the biased PE32 arena. */
+    /* Leave the 0x7ffe0000 shared-data page and its host page clear. */
+    teb_block = (void *)(uintptr_t)(MADEIRA_SE_WOW64_GUEST_BIAS
+                                    + 0x70000000 - total);
+    NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, 0, &total,
+                             MEM_RESERVE, PAGE_READWRITE );
+#else
     NtAllocateVirtualMemory( NtCurrentProcess(), &teb_block, is_win64 ? limit_2g - 1 : 0, &total,
                              MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE );
+#endif
     teb_block_pos = 30;
     ptr = (char *)teb_block + 30 * block_size;
     data_size = 2 * block_size;
@@ -5052,7 +5200,14 @@ void virtual_set_large_address_space(void)
                 free_reserved_memory( 0, (char *)0x7ffe0000 );
 #endif
         }
-        else user_space_wow_limit = ((main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE) ? limit_4g : limit_2g) - 1;
+        else
+        {
+            user_space_wow_limit = ((main_image_info.ImageCharacteristics & IMAGE_FILE_LARGE_ADDRESS_AWARE)
+                                    ? limit_4g : limit_2g) - 1;
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+            user_space_wow_limit += MADEIRA_SE_WOW64_GUEST_BIAS;
+#endif
+        }
     }
     else
     {
@@ -5241,7 +5396,22 @@ NTSTATUS WINAPI NtAllocateVirtualMemory( HANDLE process, PVOID *ret, ULONG_PTR z
     }
 
     if (!*ret)
+    {
         limit = get_zero_bits_limit( zero_bits );
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+        if (is_wow64())
+        {
+            ULONG_PTR guest_limit = limit;
+
+            if (!guest_limit || guest_limit >= MADEIRA_SE_WOW64_GUEST_SIZE)
+                guest_limit = user_space_wow_limit - MADEIRA_SE_WOW64_GUEST_BIAS;
+            return allocate_virtual_memory( ret, size_ptr, type, protect,
+                                            MADEIRA_SE_WOW64_GUEST_BIAS + 0x10000,
+                                            MADEIRA_SE_WOW64_GUEST_BIAS + guest_limit,
+                                            0, 0 );
+        }
+#endif
+    }
     else
         limit = 0;
 
@@ -6326,6 +6496,19 @@ NTSTATUS WINAPI NtMapViewOfSection( HANDLE handle, HANDLE process, PVOID *addr_p
         return result.map_view.status;
     }
 
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    if (!*addr_ptr && is_wow64())
+    {
+        ULONG_PTR guest_limit = get_zero_bits_limit( zero_bits );
+
+        if (!guest_limit || guest_limit >= MADEIRA_SE_WOW64_GUEST_SIZE)
+            guest_limit = user_space_wow_limit - MADEIRA_SE_WOW64_GUEST_BIAS;
+        return virtual_map_section( handle, addr_ptr,
+                                    MADEIRA_SE_WOW64_GUEST_BIAS + 0x10000,
+                                    MADEIRA_SE_WOW64_GUEST_BIAS + guest_limit,
+                                    commit_size, offset_ptr, size_ptr, alloc_type, protect, 0 );
+    }
+#endif
     return virtual_map_section( handle, addr_ptr, 0, get_zero_bits_limit( zero_bits ), commit_size,
                                 offset_ptr, size_ptr, alloc_type, protect, 0 );
 }

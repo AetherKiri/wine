@@ -1,0 +1,11 @@
+MODULE    = madeiracpu.dll
+UNIXLIB   = madeiracpu.so
+IMPORTS   = wow64 ntdll
+UNIX_LIBS = $(PTHREAD_LIBS)
+EXTRADEFS = -D_CRTIMP=
+
+EXTRADLLFLAGS = -nodefaultlibs
+
+SOURCES = \
+	cpu.c \
+	unixlib.c

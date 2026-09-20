@@ -4120,6 +4120,7 @@ NTSTATUS CDECL wine_server_handle_to_fd( HANDLE handle, unsigned int access, int
  * inventing one would manufacture false positives.  Deduped per (module,
  * slot) so one persistent zero cannot flood the cap.
  */
+#ifdef __arm64ec__
 static void iat_life_sweep( const char *when )
 {
     extern void *xlate_ios_jit( void *ptr );
@@ -4209,6 +4210,7 @@ static void iat_life_sweep( const char *when )
         ERR( "[iat-life] ml701 sweep#%d after=%s modules=%d slots=%d pooled=%d pe0=%d pool0=%d\n",
              sweeps, when, n_mod, n_slot, n_pool, n_pezero, n_poolzero );
 }
+#endif
 
 NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR search_path, DWORD *load_flags,
                                              const UNICODE_STRING *libname, HMODULE* hModule)
@@ -4252,6 +4254,7 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR search_path, DWORD *load_fl
         }
         else
         {
+#ifdef __arm64ec__
             char tag[64];
             const WCHAR *bn = wm->ldr.BaseDllName.Buffer;
             unsigned int k = 0;
@@ -4259,6 +4262,7 @@ NTSTATUS WINAPI DECLSPEC_HOTPATCH LdrLoadDll(LPCWSTR search_path, DWORD *load_fl
             while (bn && bn[k] && k < sizeof(tag) - 1) { tag[k] = (char)bn[k]; k++; }
             tag[k] = 0;
             iat_life_sweep( tag );   /* ml701 [iat-life] stage 2 */
+#endif
         }
     }
     if (wm) *hModule = wm->ldr.DllBase;
@@ -4758,7 +4762,7 @@ fail:
         }
         ERR( "[delay-fail] rev=ml334 importer=%p target=%s import=%s status=%08x hmod=%p"
              " -- Chromium's DelayLoad-ModuleName hook kills the process on this\n",
-             base, debugstr_a(name), debugstr_a(imp), nts, *phmod );
+             base, debugstr_a(name), debugstr_a(imp), (unsigned int)nts, *phmod );
     }
 
     delayinfo.Size = sizeof(delayinfo);

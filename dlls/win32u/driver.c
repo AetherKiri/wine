@@ -25,6 +25,7 @@
 
 #include <assert.h>
 #include <pthread.h>
+#include <stdlib.h>
 
 #include "ntstatus.h"
 #include "ntgdi_private.h"
@@ -968,7 +969,24 @@ static BOOL load_desktop_driver( HWND hwnd )
     memcpy( ptr, guid_key_suffixW, sizeof(guid_key_suffixW) );
     ptr += ARRAY_SIZE(guid_key_suffixW);
 
-    if (!(hkey = reg_open_key( NULL, key, (ptr - key) * sizeof(WCHAR) ))) return FALSE;
+    if (!(hkey = reg_open_key( NULL, key, (ptr - key) * sizeof(WCHAR) )))
+    {
+        /* A standalone launch intentionally has no explorer process to
+         * create the volatile video key.  Ask the PE side to load the
+         * configured Cocoa driver directly; the callback uses the same
+         * loader path as explorer's normal LoadLibraryW call. */
+        if (getenv( "MADEIRA_SE_NO_DESKTOP" ))
+        {
+            static const WCHAR driverW[] = {'w','i','n','e','m','a','c','.','d','r','v',0};
+            void *ret_ptr;
+            ULONG ret_len;
+
+            if (!KeUserModeCallback( NtUserLoadDriver, (void *)driverW, sizeof(driverW),
+                                     &ret_ptr, &ret_len ))
+                return TRUE;
+        }
+        return FALSE;
+    }
 
     if ((size = query_reg_ascii_value( hkey, "GraphicsDriver", info, sizeof(buf) )))
     {

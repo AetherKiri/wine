@@ -91,6 +91,8 @@
 #include "unix_private.h"
 #include "wine/list.h"
 #include "wine/debug.h"
+#include "wine/madeira_se.h"
+#include "madeira_wow64.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(module);
 
@@ -109,6 +111,10 @@ void *pRtlUserThreadStart = NULL;
 void *p__wine_ctrl_routine = NULL;
 SYSTEM_DLL_INIT_BLOCK *pLdrSystemDllInitBlock = NULL;
 
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+static SYSTEM_DLL_INIT_BLOCK madeira_se_init_block = { 0xf0 };
+#endif
+
 #ifdef __GNUC__
 static void fatal_error( const char *err, ... ) __attribute__((noreturn, format(printf,1,2)));
 #endif
@@ -117,6 +123,11 @@ static const char *bin_dir;
 static const char *dll_dir;
 static const char *ntdll_dir;
 static const char *alt_build_dir;
+static const char *madeira_guest_build_dir;
+/* Optional standalone DXMT PE overlay.  Its modules must be selected before
+ * Wine's generated wined3d-backed guest tree while still loading as builtins. */
+static const char *madeira_dxmt_dir;
+static USHORT madeira_guest_machine;
 static SIZE_T dll_path_maxlen;
 
 const char *home_dir = NULL;
@@ -394,6 +405,7 @@ static void init_paths(void)
         wineloader = build_path( build_dir, "loader/wine" );
         alt_build_dir = realpath_dirname( build_path( build_dir, "loader-wow64" ));
     }
+
     else
     {
         if (!(dll_dir = remove_tail( ntdll_dir, get_so_dir(current_machine) ))) dll_dir = ntdll_dir;
@@ -401,6 +413,22 @@ static void init_paths(void)
         data_dir = build_relative_path( dll_dir, LIBDIR "/wine", DATADIR "/wine" );
         wineloader = build_path( ntdll_dir, "wine" );
     }
+
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    if (getenv( "MADEIRA_SE_DXMT_DIR" ))
+        madeira_dxmt_dir = strdup( getenv( "MADEIRA_SE_DXMT_DIR" ) );
+    if (getenv( "MADEIRA_SE_GUEST_BUILD_DIR" ))
+        madeira_guest_build_dir = strdup( getenv( "MADEIRA_SE_GUEST_BUILD_DIR" ) );
+    if (madeira_guest_build_dir)
+    {
+        const char *arch = getenv( "MADEIRA_SE_GUEST_ARCH" );
+
+        if (arch && (!strcmp( arch, "x86_64" ) || !strcmp( arch, "amd64" )))
+            madeira_guest_machine = IMAGE_FILE_MACHINE_AMD64;
+        else if (arch && (!strcmp( arch, "i386" ) || !strcmp( arch, "x86" )))
+            madeira_guest_machine = IMAGE_FILE_MACHINE_I386;
+    }
+#endif
 
     set_dll_path();
     set_system_dll_path();
@@ -417,6 +445,12 @@ char *get_alternate_wineloader( WORD machine )
     const char *arch;
     BOOL force_wow64 = (arch = getenv( "WINEARCH" )) && !strcmp( arch, "wow64" );
     char *ret = NULL;
+
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    /* Madeira-SE runs x86 PE code through the in-process TCTI provider.  There
+     * is deliberately no native x86 Unix loader to exec on Apple Silicon. */
+    if (machine == IMAGE_FILE_MACHINE_I386 || machine == IMAGE_FILE_MACHINE_AMD64) return NULL;
+#endif
 
     if (is_win64)
     {
@@ -1146,10 +1180,19 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, ANSI_STRING *exp_name
 
     if (build_dir)
     {
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+        if (madeira_guest_build_dir && (search_machine == IMAGE_FILE_MACHINE_I386 ||
+                                        search_machine == IMAGE_FILE_MACHINE_AMD64))
+            pe_build_dir = madeira_guest_build_dir;
+        else
+#endif
         if (alt_build_dir && search_machine == get_alt_machine( current_machine ))
             pe_build_dir = alt_build_dir;
         maxlen = max( strlen(build_dir), strlen(pe_build_dir) ) + sizeof("/programs/") + len;
     }
+    if (madeira_dxmt_dir && (search_machine == IMAGE_FILE_MACHINE_I386 ||
+                             search_machine == IMAGE_FILE_MACHINE_AMD64))
+        maxlen = max( maxlen, strlen(madeira_dxmt_dir) + strlen(pe_dir) + len + 2 );
     maxlen = max( maxlen, dll_path_maxlen + 1 ) + len + sizeof("/aarch64-windows") + sizeof(".so");
 
     if (!(file = malloc( maxlen ))) return STATUS_NO_MEMORY;
@@ -1176,6 +1219,21 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, ANSI_STRING *exp_name
 
     TRACE( "looking for %s for file %s\n", debugstr_a(file + pos + 1), debugstr_us(nt_name) );
 
+    /* DXMT is built outside the Wine tree.  Check its architecture-specific
+     * PE directory first; otherwise the generated Wine d3d11/dxgi builtins
+     * win even when the launcher requested builtin loading. */
+    if (madeira_dxmt_dir && (search_machine == IMAGE_FILE_MACHINE_I386 ||
+                             search_machine == IMAGE_FILE_MACHINE_AMD64))
+    {
+        ptr = file + pos;
+        ptr = prepend( ptr, pe_dir, strlen(pe_dir) );
+        ptr = prepend( ptr, madeira_dxmt_dir, strlen(madeira_dxmt_dir) );
+        status = open_builtin_pe_file( ptr, &attr, module, size_ptr, image_info,
+                                       limit_low, limit_high, load_machine,
+                                       prefer_native, offset );
+        if (status != STATUS_DLL_NOT_FOUND) goto done;
+    }
+
     if (build_dir)
     {
         /* try as a dll */
@@ -1190,6 +1248,7 @@ static NTSTATUS find_builtin_dll( UNICODE_STRING *nt_name, ANSI_STRING *exp_name
 
         /* now as a program */
         ptr = prepend_build_dir_path( file + pos, ".exe", pe_dir, "/programs", pe_build_dir );
+        TRACE( "trying guest program %s\n", debugstr_a(ptr) );
         status = open_builtin_pe_file( ptr, &attr, module, size_ptr, image_info,
                                        limit_low, limit_high, load_machine, prefer_native, offset );
         ptr = prepend_build_dir_path( file + pos, ".exe", "", "/programs", build_dir );
@@ -1380,6 +1439,11 @@ static const WCHAR *get_machine_wow64_dir( WORD machine )
     switch (machine)
     {
     case IMAGE_FILE_MACHINE_TARGET_HOST: return system32;
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    case IMAGE_FILE_MACHINE_AMD64:
+        if (madeira_guest_build_dir) return system32;
+        return NULL;
+#endif
     case IMAGE_FILE_MACHINE_I386:        return syswow64;
     case IMAGE_FILE_MACHINE_ARMNT:       return sysarm32;
     default: return NULL;
@@ -1400,6 +1464,29 @@ BOOL is_builtin_path( const UNICODE_STRING *path, WORD *machine )
 
     /* only fake builtin existence during prefix bootstrap */
     if (!is_prefix_bootstrap) return FALSE;
+
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    /* An architecture-isolated Madeira-SE prefix installs its selected x86
+     * guest into system32.  The native ARM64 wineserver lists ARM64 first,
+     * so the generic scan below would otherwise resolve this path against
+     * the native build before it ever considers the emulated guest. */
+    if (madeira_guest_build_dir && madeira_guest_machine)
+    {
+        static const WCHAR system32[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s','\\',
+                                         's','y','s','t','e','m','3','2','\\',0};
+
+        dirlen = ARRAY_SIZE(system32) - 1;
+        if (len > dirlen && !wcsnicmp( p, system32, dirlen ))
+        {
+            for (i = dirlen; i < len; i++) if (p[i] == '\\') break;
+            if (i == len)
+            {
+                *machine = madeira_guest_machine;
+                return TRUE;
+            }
+        }
+    }
+#endif
 
     for (i = 0; i < supported_machines_count; i++)
     {
@@ -1487,12 +1574,19 @@ NTSTATUS load_start_exe( UNICODE_STRING *nt_name, void **module )
     static const WCHAR startW[] = {'s','t','a','r','t','.','e','x','e',0};
     unsigned int status;
     SIZE_T size;
+    USHORT machine = current_machine;
     WCHAR *image = malloc( sizeof("\\??\\C:\\windows\\system32\\start.exe") * sizeof(WCHAR) );
 
     wcscpy( image, get_machine_wow64_dir( current_machine ));
     wcscat( image, startW );
     init_unicode_string( nt_name, image );
-    status = find_builtin_dll( nt_name, NULL, module, &size, &main_image_info, 0, 0, current_machine, 0, FALSE, 0 );
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    if (madeira_guest_build_dir && (main_image_info.Machine == IMAGE_FILE_MACHINE_I386 ||
+                                    main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64))
+        machine = main_image_info.Machine;
+#endif
+    status = find_builtin_dll( nt_name, NULL, module, &size, &main_image_info, 0, 0,
+                               machine, 0, FALSE, 0 );
     if (!NT_SUCCESS(status))
     {
         MESSAGE( "wine: failed to load start.exe: %x\n", status );
@@ -1549,6 +1643,24 @@ static const void *get_module_data_dir( HMODULE module, ULONG dir, ULONG *size )
     return get_rva( module, data->VirtualAddress );
 }
 
+#if defined(__APPLE__) && defined(__aarch64__)
+/* Resolve an export from either a biased PE32 image or a direct PE32+ image. */
+void *madeira_se_find_guest_export( HMODULE module, const char *name )
+{
+    ULONG_PTR address = (ULONG_PTR)module;
+    HMODULE host_module = module;
+    const IMAGE_EXPORT_DIRECTORY *exports;
+
+    if (address >= MADEIRA_SE_WOW64_LOWEST_USER_ADDRESS && address < (1ULL << 32))
+        host_module = madeira_se_wow64_guest_to_host( address );
+    if (!host_module || !(exports = get_module_data_dir( host_module,
+                                                          IMAGE_DIRECTORY_ENTRY_EXPORT,
+                                                          NULL )))
+        return NULL;
+    return (void *)find_named_export( host_module, exports, name );
+}
+#endif
+
 /***********************************************************************
  *           load_ntdll_functions
  */
@@ -1603,13 +1715,30 @@ static void load_ntdll_functions( HMODULE module )
 static void load_ntdll_wow64_functions( HMODULE module )
 {
     const IMAGE_EXPORT_DIRECTORY *exports;
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    const BOOL biased_i386 = (uintptr_t)module >= MADEIRA_SE_WOW64_GUEST_BIAS &&
+                             (uintptr_t)module < MADEIRA_SE_WOW64_GUEST_BIAS +
+                                                 MADEIRA_SE_WOW64_GUEST_SIZE;
+#endif
 
     exports = get_module_data_dir( module, IMAGE_FILE_EXPORT_DIRECTORY, NULL );
     assert( exports );
 
     pLdrSystemDllInitBlock->ntdll_handle = (ULONG_PTR)module;
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    if (biased_i386)
+        pLdrSystemDllInitBlock->ntdll_handle = madeira_se_wow64_host_to_guest( module );
+#endif
 
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+#define GET_FUNC(name) do { \
+    ULONG_PTR address = find_named_export( module, exports, #name ); \
+    pLdrSystemDllInitBlock->p##name = biased_i386 \
+        ? madeira_se_wow64_host_to_guest( (void *)address ) : address; \
+} while (0)
+#else
 #define GET_FUNC(name) pLdrSystemDllInitBlock->p##name = find_named_export( module, exports, #name )
+#endif
     GET_FUNC( KiUserApcDispatcher );
     GET_FUNC( KiUserCallbackDispatcher );
     GET_FUNC( KiUserExceptionDispatcher );
@@ -1621,18 +1750,34 @@ static void load_ntdll_wow64_functions( HMODULE module )
 #undef GET_FUNC
 
     p__wine_ctrl_routine = (void *)find_named_export( module, exports, "__wine_ctrl_routine" );
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    if (biased_i386)
+        p__wine_ctrl_routine = (void *)(uintptr_t)madeira_se_wow64_host_to_guest( p__wine_ctrl_routine );
+#endif
 
 #ifdef _WIN64
     {
         unixlib_handle_t *p__wine_unixlib_handle = (void *)find_named_export( module, exports,
                                                                               "__wine_unixlib_handle" );
-        *p__wine_unixlib_handle = (UINT_PTR)unix_call_wow64_funcs;
+        const IMAGE_NT_HEADERS *nt = get_rva( module, ((IMAGE_DOS_HEADER *)module)->e_lfanew );
+
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+        if (madeira_guest_build_dir && nt->FileHeader.Machine == IMAGE_FILE_MACHINE_AMD64)
+            *p__wine_unixlib_handle = (UINT_PTR)unix_call_funcs;
+        else
+#endif
+            *p__wine_unixlib_handle = (UINT_PTR)unix_call_wow64_funcs;
     }
 #endif
 
     /* also set the 32-bit LdrSystemDllInitBlock */
-    memcpy( (void *)(ULONG_PTR)pLdrSystemDllInitBlock->pLdrSystemDllInitBlock,
-            pLdrSystemDllInitBlock, sizeof(*pLdrSystemDllInitBlock) );
+    {
+        void *guest_block = (void *)(ULONG_PTR)pLdrSystemDllInitBlock->pLdrSystemDllInitBlock;
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+        if (biased_i386) guest_block = madeira_se_wow64_guest_to_host( (ULONG_PTR)guest_block );
+#endif
+        memcpy( guest_block, pLdrSystemDllInitBlock, sizeof(*pLdrSystemDllInitBlock) );
+    }
 }
 
 
@@ -1730,7 +1875,9 @@ static void load_apiset_dll(void)
     static WCHAR path[] = {'\\','?','?','\\','C',':','\\','w','i','n','d','o','w','s','\\',
                            's','y','s','t','e','m','3','2','\\',
                            'a','p','i','s','e','t','s','c','h','e','m','a','.','d','l','l',0};
-    const char *pe_dir = get_pe_dir( current_machine );
+    USHORT schema_machine = current_machine;
+    const char *schema_build_dir = build_dir;
+    const char *pe_dir;
     const IMAGE_NT_HEADERS *nt;
     const IMAGE_SECTION_HEADER *sec;
     API_SET_NAMESPACE *map;
@@ -1746,7 +1893,20 @@ static void load_apiset_dll(void)
     init_unicode_string( &str, path );
     InitializeObjectAttributes( &attr, &str, 0, 0, NULL );
 
-    if (build_dir) asprintf( &name, "%s/dlls/apisetschema%s/apisetschema.dll", build_dir, pe_dir );
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    /* The native Madeira-SE host has no ARM PE payload.  Load the API-set
+     * namespace from the same pure-guest build as the main x86 image. */
+    if (madeira_guest_build_dir && (main_image_info.Machine == IMAGE_FILE_MACHINE_I386 ||
+                                    main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64))
+    {
+        schema_machine = main_image_info.Machine;
+        schema_build_dir = madeira_guest_build_dir;
+    }
+#endif
+    pe_dir = get_pe_dir( schema_machine );
+
+    if (schema_build_dir)
+        asprintf( &name, "%s/dlls/apisetschema%s/apisetschema.dll", schema_build_dir, pe_dir );
     else asprintf( &name, "%s%s/apisetschema.dll", dll_dir, pe_dir );
     status = open_unix_file( &handle, name, GENERIC_READ | SYNCHRONIZE, &attr, 0,
                              FILE_SHARE_READ | FILE_SHARE_DELETE, FILE_OPEN,
@@ -1856,6 +2016,9 @@ static ULONG_PTR get_image_address(void)
 static void start_main_thread(void)
 {
     TEB *teb = virtual_alloc_first_teb();
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    USHORT madeira_se_guest_machine = IMAGE_FILE_MACHINE_UNKNOWN;
+#endif
 
     signal_init_threading();
     dbg_init();
@@ -1868,9 +2031,46 @@ static void start_main_thread(void)
     set_load_order_app_name( main_wargv[0] );
     init_thread_stack( teb, 0, 0, 0 );
     NtCreateKeyedEvent( &keyed_event, GENERIC_READ | GENERIC_WRITE, NULL, 0 );
-    load_ntdll();
-    load_wow64_ntdll( main_image_info.Machine );
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    if (main_image_info.Machine == IMAGE_FILE_MACHINE_I386)
+    {
+        pLdrSystemDllInitBlock = &madeira_se_init_block;
+        pLdrInitializeThunk = Wow64LdrpInitialize;
+        pRtlUserThreadStart = Wow64LdrpInitialize;
+        load_wow64_ntdll( main_image_info.Machine );
+        madeira_se_guest_machine = main_image_info.Machine;
+    }
+    else if (main_image_info.Machine == IMAGE_FILE_MACHINE_AMD64 && madeira_guest_build_dir)
+    {
+        pLdrSystemDllInitBlock = &madeira_se_init_block;
+        pLdrInitializeThunk = madeira_se_x64_ldr_initialize;
+        pRtlUserThreadStart = madeira_se_x64_ldr_initialize;
+        load_wow64_ntdll( main_image_info.Machine );
+        madeira_se_guest_machine = main_image_info.Machine;
+    }
+    else
+#endif
+    {
+        load_ntdll();
+        load_wow64_ntdll( main_image_info.Machine );
+    }
     load_apiset_dll();
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    if (madeira_se_guest_machine == IMAGE_FILE_MACHINE_I386)
+    {
+        NTSTATUS status = madeira_se_wow64_host_init( pLdrSystemDllInitBlock,
+                                                       (WOW64INFO *)(wow_peb + 1),
+                                                       user_space_wow_limit - MADEIRA_SE_WOW64_GUEST_BIAS,
+                                                       madeira_se_wow64_get_cpu_ops() );
+        if (status) fatal_error( "failed to initialize Madeira-SE WoW64 host error %x\n", status );
+    }
+    else if (madeira_se_guest_machine == IMAGE_FILE_MACHINE_AMD64)
+    {
+        NTSTATUS status = madeira_se_x64_host_init( pLdrSystemDllInitBlock,
+                                                    (HMODULE)(ULONG_PTR)pLdrSystemDllInitBlock->ntdll_handle );
+        if (status) fatal_error( "failed to initialize Madeira-SE x86-64 host error %x\n", status );
+    }
+#endif
     server_init_process_done();
 }
 

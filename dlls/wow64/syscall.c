@@ -20,6 +20,9 @@
 
 #include <stdarg.h>
 #include <setjmp.h>
+#ifdef MADEIRA_SE_WOW64_HOST
+#include <stdlib.h>
+#endif
 
 #include "ntstatus.h"
 #include "windef.h"
@@ -31,8 +34,17 @@
 #include "wine/asm.h"
 #include "wow64_private.h"
 #include "wine/debug.h"
+#ifdef MADEIRA_SE_WOW64_HOST
+#include "wine/madeira_se.h"
+#include "../ntdll/unix/madeira_wow64.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
+
+#ifdef MADEIRA_SE_WOW64_HOST
+#define GetProcessHeap() (NtCurrentTeb()->Peb->ProcessHeap)
+extern void *madeira_se_find_guest_export( HMODULE module, const char *name );
+#endif
 
 USHORT native_machine = 0;
 USHORT current_machine = 0;
@@ -60,6 +72,14 @@ static SYSTEM_SERVICE_TABLE syscall_tables[4] =
 {
     { (ULONG_PTR *)syscall_thunks, NULL, ARRAY_SIZE(syscall_thunks), syscall_args }
 };
+
+#ifdef MADEIRA_SE_WOW64_HOST
+DECLSPEC_EXPORT void madeira_se_wow64_set_win32_syscall_table( const SYSTEM_SERVICE_TABLE *table )
+{
+    if (table) syscall_tables[1] = *table;
+    else memset( &syscall_tables[1], 0, sizeof(syscall_tables[1]) );
+}
+#endif
 
 /* header for Wow64AllocTemp blocks; probably not the right layout */
 struct mem_header
@@ -118,6 +138,7 @@ void     (WINAPI *pBTCpuUpdateProcessorInformation)( SYSTEM_CPU_INFORMATION * ) 
 void     (WINAPI *pBTCpuProcessTerm)( HANDLE, BOOL, NTSTATUS ) = NULL;
 void     (WINAPI *pBTCpuThreadTerm)( HANDLE, LONG ) = NULL;
 
+#ifndef MADEIRA_SE_WOW64_HOST
 BOOL WINAPI DllMain( HINSTANCE inst, DWORD reason, void *reserved )
 {
     if (reason == DLL_PROCESS_ATTACH) LdrDisableThreadCalloutsForDll( inst );
@@ -144,6 +165,16 @@ static void DECLSPEC_NORETURN stub_syscall( const char *name )
 }
 
 #define SYSCALL_STUB(name) NTSTATUS WINAPI wow64_ ## name( UINT *args ) { stub_syscall( #name ); }
+#else
+static NTSTATUS stub_syscall( const char *name )
+{
+    FIXME( "unsupported Madeira-SE host syscall %s\n", name );
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+#define SYSCALL_STUB(name) NTSTATUS WINAPI wow64_ ## name( UINT *args ) \
+    { (void)args; return stub_syscall( #name ); }
+#endif
 ALL_SYSCALL_STUBS
 
 static EXCEPTION_RECORD *exception_record_32to64( const EXCEPTION_RECORD32 *rec32 )
@@ -154,8 +185,14 @@ static EXCEPTION_RECORD *exception_record_32to64( const EXCEPTION_RECORD32 *rec3
     rec = Wow64AllocateTemp( sizeof(*rec) );
     rec->ExceptionCode = rec32->ExceptionCode;
     rec->ExceptionFlags = rec32->ExceptionFlags;
+#ifdef MADEIRA_SE_WOW64_HOST
+    rec->ExceptionRecord = rec32->ExceptionRecord ?
+        exception_record_32to64( madeira_se_wow64_guest_to_host( rec32->ExceptionRecord ) ) : NULL;
+    rec->ExceptionAddress = madeira_se_wow64_guest_to_host( rec32->ExceptionAddress );
+#else
     rec->ExceptionRecord = rec32->ExceptionRecord ? exception_record_32to64( ULongToPtr(rec32->ExceptionRecord) ) : NULL;
     rec->ExceptionAddress = ULongToPtr( rec32->ExceptionAddress );
+#endif
     rec->NumberParameters = rec32->NumberParameters;
     for (i = 0; i < EXCEPTION_MAXIMUM_PARAMETERS; i++)
         rec->ExceptionInformation[i] = rec32->ExceptionInformation[i];
@@ -209,13 +246,14 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
                 I386_CONTEXT       context;       /* 058 */
             } *stack;
             I386_CONTEXT ctx = { CONTEXT_I386_ALL };
-            CONTEXT_EX *context_ex, *src_ex = NULL;
+            CONTEXT_EX *context_ex = NULL, *src_ex = NULL;
             ULONG esp, flags, context_length;
 
             C_ASSERT( offsetof(struct exc_stack_layout32, context) == 0x58 );
 
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
 
+#ifndef MADEIRA_SE_WOW64_HOST
             if (ctx32_ptr)
             {
                 I386_CONTEXT *ctx32 = ctx32_ptr;
@@ -237,15 +275,32 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
             if (src_ex) flags |= CONTEXT_I386_XSTATE;
 
             RtlGetExtendedContextLength( flags, &context_length );
+#else
+            (void)ctx32_ptr;
+            (void)ctx64_ptr;
+            flags = ctx.ContextFlags & ~CONTEXT_I386_XSTATE;
+            context_length = 0;
+#endif
 
             esp = LOWORD(ctx.SegSs) != ss32_sel ? NtCurrentTeb32()->SystemReserved1[0] : ctx.Esp;
-            stack = (struct exc_stack_layout32 *)ULongToPtr( (esp - offsetof(struct exc_stack_layout32, context) - context_length) & ~3 );
+#ifdef MADEIRA_SE_WOW64_HOST
+            stack = (struct exc_stack_layout32 *)madeira_se_wow64_guest_to_host(
+                (esp - offsetof(struct exc_stack_layout32, context) - context_length) & ~3 );
+#else
+            stack = (struct exc_stack_layout32 *)ULongToPtr(
+                (esp - offsetof(struct exc_stack_layout32, context) - context_length) & ~3 );
+#endif
             stack->rec_ptr     = PtrToUlong( &stack->rec );
             stack->context_ptr = PtrToUlong( &stack->context );
             stack->rec         = *rec;
             stack->context     = ctx;
+#ifndef MADEIRA_SE_WOW64_HOST
             RtlInitializeExtendedContext( &stack->context, flags, &context_ex );
             if (src_ex) RtlCopyExtendedContext( context_ex, WOW64_CONTEXT_XSTATE, src_ex );
+#else
+            (void)context_ex;
+            (void)src_ex;
+#endif
 
             /* adjust Eip for breakpoints in software emulation (hardware exceptions already adjust Rip) */
             if (rec->ExceptionCode == EXCEPTION_BREAKPOINT && (wow64info->CpuFlags & WOW64_CPUFLAGS_SOFTWARE))
@@ -309,7 +364,11 @@ static void __attribute__((used)) call_raise_user_exception_dispatcher( ULONG co
             ctx.ContextFlags = CONTEXT_I386_CONTROL;
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
             ctx.Esp -= sizeof(ULONG);
+#ifdef MADEIRA_SE_WOW64_HOST
+            *(ULONG *)madeira_se_wow64_guest_to_host( ctx.Esp ) = ctx.Eip;
+#else
             *(ULONG *)ULongToPtr( ctx.Esp ) = ctx.Eip;
+#endif
             ctx.Eip = (ULONG_PTR)pKiRaiseUserExceptionDispatcher;
             pBTCpuSetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
         }
@@ -332,7 +391,15 @@ static void __attribute__((used)) call_raise_user_exception_dispatcher( ULONG co
 /* based on RtlRaiseException: call NtRaiseException with context setup to return to caller */
 void WINAPI raise_exception( EXCEPTION_RECORD32 *rec32, void *ctx32,
                              BOOL first_chance, EXCEPTION_RECORD *rec );
-#ifdef __aarch64__
+#ifdef MADEIRA_SE_WOW64_HOST
+void WINAPI raise_exception( EXCEPTION_RECORD32 *rec32, void *ctx32,
+                             BOOL first_chance, EXCEPTION_RECORD *rec )
+{
+    (void)first_chance;
+    (void)rec;
+    call_user_exception_dispatcher( rec32, ctx32, NULL );
+}
+#elif defined(__aarch64__)
 __ASM_GLOBAL_FUNC( raise_exception,
                    "sub sp, sp, #0x390\n\t"    /* sizeof(context) */
                    ".seh_stackalloc 0x390\n\t"
@@ -475,6 +542,8 @@ NTSTATUS WINAPI wow64_NtCallbackReturn( UINT *args )
 
     struct user_callback_frame *frame = NtCurrentTeb()->TlsSlots[WOW64_TLS_USERCALLBACKDATA];
 
+    TRACE( "Madeira callback return frame %p ret %p len %lu status %#x\n",
+           frame, ret_ptr, (unsigned long)ret_len, (unsigned int)status );
     if (!frame) return STATUS_NO_CALLBACK_ACTIVE;
 
     *frame->ret_ptr = ret_ptr;
@@ -512,6 +581,9 @@ NTSTATUS WINAPI wow64_NtContinueEx( UINT *args )
 
     while (frame && frame->wow_context != context) frame = frame->prev_frame;
     NtCurrentTeb()->TlsSlots[WOW64_TLS_APCLIST] = frame ? frame->prev_frame : NULL;
+#ifdef MADEIRA_SE_WOW64_HOST
+    TRACE( "Madeira NtContinue context %p native APC frame %p\n", context, frame );
+#endif
     if (frame) NtContinueEx( frame->context, cont_args );
 
     if ((UINT_PTR)cont_args > 0xff)
@@ -565,8 +637,21 @@ NTSTATUS WINAPI wow64_NtGetContextThread( UINT *args )
     HANDLE handle = get_handle( &args );
     WOW64_CONTEXT *context = get_ptr( &args );
 
+#ifdef MADEIRA_SE_WOW64_HOST
+    if (!pBTCpuGetContext) return STATUS_NOT_SUPPORTED;
+    return pBTCpuGetContext( handle, GetCurrentProcess(), NULL, context );
+#else
     return RtlWow64GetThreadContext( handle, context );
+#endif
 }
+
+#ifdef MADEIRA_SE_WOW64_HOST
+NTSTATUS madeira_se_wow64_get_thread_context( HANDLE handle, WOW64_CONTEXT *context )
+{
+    if (!pBTCpuGetContext) return STATUS_NOT_SUPPORTED;
+    return pBTCpuGetContext( handle, GetCurrentProcess(), NULL, context );
+}
+#endif
 
 
 /**********************************************************************
@@ -651,7 +736,12 @@ NTSTATUS WINAPI wow64_NtSetContextThread( UINT *args )
     HANDLE handle = get_handle( &args );
     WOW64_CONTEXT *context = get_ptr( &args );
 
+#ifdef MADEIRA_SE_WOW64_HOST
+    if (!pBTCpuSetContext) return STATUS_NOT_SUPPORTED;
+    return pBTCpuSetContext( handle, GetCurrentProcess(), NULL, context );
+#else
     return RtlWow64SetThreadContext( handle, context );
+#endif
 }
 
 
@@ -707,7 +797,11 @@ NTSTATUS WINAPI wow64_NtWow64IsProcessorFeaturePresent( UINT *args )
  */
 void init_image_mapping( HMODULE module )
 {
+#ifdef MADEIRA_SE_WOW64_HOST
+    ULONG *ptr = madeira_se_find_guest_export( module, "Wow64Transition" );
+#else
     ULONG *ptr = RtlFindExportedRoutineByName( module, "Wow64Transition" );
+#endif
 
     if (ptr) *ptr = PtrToUlong( pBTCpuGetBopCode() );
 }
@@ -716,6 +810,7 @@ void init_image_mapping( HMODULE module )
 /**********************************************************************
  *           load_64bit_module
  */
+#ifndef MADEIRA_SE_WOW64_HOST
 static HMODULE load_64bit_module( const WCHAR *name )
 {
     NTSTATUS status;
@@ -724,7 +819,13 @@ static HMODULE load_64bit_module( const WCHAR *name )
     WCHAR path[MAX_PATH];
     const WCHAR *dir = get_machine_wow64_dir( IMAGE_FILE_MACHINE_TARGET_HOST );
 
+#ifdef MADEIRA_SE_WOW64_HOST
+    wcscpy( path, dir );
+    wcscat( path, L"\\" );
+    wcscat( path, name );
+#else
     swprintf( path, MAX_PATH, L"%s\\%s", dir, name );
+#endif
     RtlInitUnicodeString( &str, path );
     if ((status = LdrLoadDll( dir, 0, &str, &module )))
     {
@@ -752,7 +853,7 @@ static const WCHAR *get_cpu_dll_name(void)
     {
     case IMAGE_FILE_MACHINE_I386:
         RtlInitUnicodeString( &nameW, L"\\Registry\\Machine\\Software\\Microsoft\\Wow64\\x86" );
-        ret = (native_machine == IMAGE_FILE_MACHINE_ARM64 ? L"xtajit.dll" : L"wow64cpu.dll");
+        ret = (native_machine == IMAGE_FILE_MACHINE_ARM64 ? L"madeiracpu.dll" : L"wow64cpu.dll");
         break;
     case IMAGE_FILE_MACHINE_ARMNT:
         RtlInitUnicodeString( &nameW, L"\\Registry\\Machine\\Software\\Microsoft\\Wow64\\arm" );
@@ -774,6 +875,7 @@ static const WCHAR *get_cpu_dll_name(void)
     NtClose( key );
     return ret;
 }
+#endif /* !MADEIRA_SE_WOW64_HOST */
 
 
 /**********************************************************************
@@ -809,10 +911,83 @@ static NTSTATUS create_cross_process_work_list( WOW64INFO *wow64info )
     return STATUS_SUCCESS;
 }
 
+#ifdef MADEIRA_SE_WOW64_HOST
+NTSTATUS madeira_se_wow64_host_init( SYSTEM_DLL_INIT_BLOCK *init_block,
+                                     WOW64INFO *info, ULONG highest_address,
+                                     const struct madeira_se_wow64_cpu_ops *ops )
+{
+    HMODULE module;
+    ULONG *syscall_ptr, *unix_call_ptr;
+    I386_CONTEXT context = { CONTEXT_I386_CONTROL };
+    NTSTATUS status;
+
+    if (!init_block || !info || !ops || !ops->initialize || !ops->get_bop_code ||
+        !ops->get_context || !ops->set_context || !ops->thread_init || !ops->simulate ||
+        !ops->get_unix_opcode)
+        return STATUS_INVALID_PARAMETER;
+    if ((status = ops->initialize())) return status;
+
+    native_machine = IMAGE_FILE_MACHINE_ARM64;
+    current_machine = IMAGE_FILE_MACHINE_I386;
+    args_alignment = sizeof(ULONG);
+    highest_user_address = highest_address;
+    default_zero_bits = highest_address | 0x7fffffff;
+    pLdrSystemDllInitBlock = init_block;
+    wow64info = info;
+    wow64info->NativeSystemPageSize = 0x1000;
+    wow64info->NativeMachineType = native_machine;
+    wow64info->EmulatedMachineType = current_machine;
+    wow64info->CpuFlags |= WOW64_CPUFLAGS_SOFTWARE;
+    NtCurrentTeb()->TlsSlots[WOW64_TLS_WOW64INFO] = wow64info;
+
+    pBTCpuGetBopCode = ops->get_bop_code;
+    pBTCpuGetContext = ops->get_context;
+    pBTCpuIsProcessorFeaturePresent = ops->is_processor_feature_present;
+    pBTCpuProcessInit = ops->process_init;
+    pBTCpuSetContext = ops->set_context;
+    pBTCpuThreadInit = ops->thread_init;
+    pBTCpuSimulate = ops->simulate;
+    p__wine_get_unix_opcode = ops->get_unix_opcode;
+    pBTCpuResetToConsistentState = ops->reset_to_consistent_state;
+    pBTCpuFlushInstructionCache2 = ops->flush_instruction_cache;
+    pBTCpuFlushInstructionCacheHeavy = ops->flush_instruction_cache;
+    pBTCpuNotifyMapViewOfSection = ops->notify_map_view;
+    pBTCpuNotifyMemoryAlloc = ops->notify_memory_alloc;
+    pBTCpuNotifyMemoryDirty = ops->notify_memory_dirty;
+    pBTCpuNotifyMemoryFree = ops->notify_memory_free;
+    pBTCpuNotifyMemoryProtect = ops->notify_memory_protect;
+    pBTCpuNotifyReadFile = ops->notify_read_file;
+    pBTCpuNotifyUnmapViewOfSection = ops->notify_unmap_view;
+    pBTCpuUpdateProcessorInformation = ops->update_processor_information;
+    pBTCpuProcessTerm = ops->process_term;
+    pBTCpuThreadTerm = ops->thread_term;
+    if (pBTCpuProcessInit) pBTCpuProcessInit();
+
+    module = (HMODULE)(ULONG_PTR)init_block->ntdll_handle;
+    init_image_mapping( module );
+    pKiRaiseUserExceptionDispatcher = madeira_se_find_guest_export(
+        module, "KiRaiseUserExceptionDispatcher" );
+    syscall_ptr = madeira_se_find_guest_export( module, "__wine_syscall_dispatcher" );
+    unix_call_ptr = madeira_se_find_guest_export( module, "__wine_unix_call_dispatcher" );
+    if (!pKiRaiseUserExceptionDispatcher || !syscall_ptr || !unix_call_ptr)
+        return STATUS_PROCEDURE_NOT_FOUND;
+    *syscall_ptr = PtrToUlong( pBTCpuGetBopCode() );
+    *unix_call_ptr = PtrToUlong( p__wine_get_unix_opcode() );
+
+    if ((status = create_cross_process_work_list( wow64info ))) return status;
+    if (!pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &context ))
+        ss32_sel = context.SegSs;
+    if (!ss32_sel) ss32_sel = 0x2b;
+    init_file_redirects();
+    return STATUS_SUCCESS;
+}
+#endif
+
 
 /**********************************************************************
  *           process_init
  */
+#ifndef MADEIRA_SE_WOW64_HOST
 static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **context )
 {
     PEB32 *peb32;
@@ -892,6 +1067,7 @@ static DWORD WINAPI process_init( RTL_RUN_ONCE *once, void *param, void **contex
 
 #undef GET_PTR
 }
+#endif /* !MADEIRA_SE_WOW64_HOST */
 
 
 /**********************************************************************
@@ -912,7 +1088,11 @@ static void thread_init(void)
             ULONG *stack;
 
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
+#ifdef MADEIRA_SE_WOW64_HOST
+            ctx_ptr = (I386_CONTEXT *)madeira_se_wow64_guest_to_host( ctx.Esp ) - 1;
+#else
             ctx_ptr = (I386_CONTEXT *)ULongToPtr( ctx.Esp ) - 1;
+#endif
             *ctx_ptr = ctx;
             stack = (ULONG *)ctx_ptr;
             *(--stack) = 0;
@@ -958,7 +1138,11 @@ static void free_temp_data(void)
     for (mem = NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST]; mem; mem = next)
     {
         next = mem->next;
+#ifdef MADEIRA_SE_WOW64_HOST
+        free( mem );
+#else
         RtlFreeHeap( GetProcessHeap(), 0, mem );
+#endif
     }
     NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST] = NULL;
 }
@@ -967,7 +1151,12 @@ static void free_temp_data(void)
 /**********************************************************************
  *           wow64_syscall
  */
-#ifdef __aarch64__
+#ifdef MADEIRA_SE_WOW64_HOST
+static NTSTATUS wow64_syscall( UINT *args, ULONG_PTR thunk )
+{
+    return ((syscall_thunk)thunk)( args );
+}
+#elif defined(__aarch64__)
 NTSTATUS wow64_syscall( UINT *args, ULONG_PTR thunk );
 __ASM_GLOBAL_FUNC( wow64_syscall,
                    "stp x29, x30, [sp, #-16]!\n\t"
@@ -1041,6 +1230,10 @@ NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
         ERR( "unsupported syscall %04x\n", num );
         return STATUS_INVALID_SYSTEM_SERVICE;
     }
+#ifdef MADEIRA_SE_WOW64_HOST
+    TRACE( "Madeira-SE syscall %04x table %u id %03x thunk %p args %p\n",
+           num, (num >> 12) & 3, id, (void *)table->ServiceTable[id], args );
+#endif
     status = wow64_syscall( args, table->ServiceTable[id] );
     free_temp_data();
     return status;
@@ -1050,7 +1243,12 @@ NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
 /**********************************************************************
  *           cpu_simulate
  */
-#ifdef __aarch64__
+#ifdef MADEIRA_SE_WOW64_HOST
+static void DECLSPEC_NORETURN cpu_simulate(void)
+{
+    for (;;) pBTCpuSimulate();
+}
+#elif defined(__aarch64__)
 extern void DECLSPEC_NORETURN cpu_simulate(void);
 __ASM_GLOBAL_FUNC( cpu_simulate,
                    "stp x29, x30, [sp, #-16]!\n\t"
@@ -1117,11 +1315,18 @@ __ASM_GLOBAL_FUNC( cpu_simulate_handler,
  *
  * FIXME: probably not 100% compatible.
  */
+#ifdef MADEIRA_SE_WOW64_HOST
+DECLSPEC_EXPORT
+#endif
 void * WINAPI Wow64AllocateTemp( SIZE_T size )
 {
     struct mem_header *mem;
 
-    if (!(mem = RtlAllocateHeap( GetProcessHeap(), 0, offsetof( struct mem_header, data[size] ))))
+#ifdef MADEIRA_SE_WOW64_HOST
+    if (!(mem = malloc( offsetof( struct mem_header, data[size] ) )))
+#else
+    if (!(mem = RtlAllocateHeap( GetProcessHeap(), 0, offsetof( struct mem_header, data[size] ) )))
+#endif
         return NULL;
     mem->next = NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST];
     NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST] = mem;
@@ -1164,7 +1369,11 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
 
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
 
+#ifdef MADEIRA_SE_WOW64_HOST
+            stack = (struct apc_stack_layout32 *)madeira_se_wow64_guest_to_host( ctx.Esp & ~3 ) - 1;
+#else
             stack = (struct apc_stack_layout32 *)ULongToPtr( ctx.Esp & ~3 ) - 1;
+#endif
             stack->func      = arg1 >> 32;
             stack->arg1      = arg1;
             stack->arg2      = arg2;
@@ -1218,6 +1427,9 @@ void WINAPI Wow64ApcRoutine( ULONG_PTR arg1, ULONG_PTR arg2, ULONG_PTR arg3, CON
 /**********************************************************************
  *           Wow64KiUserCallbackDispatcher  (wow64.@)
  */
+#ifdef MADEIRA_SE_WOW64_HOST
+DECLSPEC_EXPORT
+#endif
 NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
                                                void **ret_ptr, ULONG *ret_len )
 {
@@ -1226,6 +1438,12 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
     ULONG teb_frame = teb32->Tib.ExceptionList;
     struct user_callback_frame frame;
     USHORT flags = cpu->Flags;
+
+#ifdef MADEIRA_SE_WOW64_HOST
+    TRACE( "Madeira callback enter id %lu args %p len %lu previous %p\n",
+           (unsigned long)id, args, (unsigned long)len,
+           NtCurrentTeb()->TlsSlots[WOW64_TLS_USERCALLBACKDATA] );
+#endif
 
     frame.prev_frame = NtCurrentTeb()->TlsSlots[WOW64_TLS_USERCALLBACKDATA];
     frame.temp_list  = NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST];
@@ -1258,7 +1476,12 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
             orig_ctx = ctx;
 
+#ifdef MADEIRA_SE_WOW64_HOST
+            stack = madeira_se_wow64_guest_to_host(
+                (ctx.Esp - offsetof(struct callback_stack_layout32,args_data[len])) & ~15 );
+#else
             stack = ULongToPtr( (ctx.Esp - offsetof(struct callback_stack_layout32,args_data[len])) & ~15 );
+#endif
             stack->eip  = ctx.Eip;
             stack->id   = id;
             stack->args = PtrToUlong( stack->args_data );
@@ -1307,6 +1530,11 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
     NtCurrentTeb()->TlsSlots[WOW64_TLS_USERCALLBACKDATA] = frame.prev_frame;
     NtCurrentTeb()->TlsSlots[WOW64_TLS_TEMPLIST] = frame.temp_list;
     cpu->Flags = flags;
+#ifdef MADEIRA_SE_WOW64_HOST
+    TRACE( "Madeira callback leave id %lu status %#x ret %p len %lu\n",
+           (unsigned long)id, (unsigned int)frame.status,
+           ret_ptr ? *ret_ptr : NULL, ret_len ? (unsigned long)*ret_len : 0 );
+#endif
     return frame.status;
 }
 
@@ -1316,11 +1544,17 @@ NTSTATUS WINAPI Wow64KiUserCallbackDispatcher( ULONG id, void *args, ULONG len,
  */
 void WINAPI Wow64LdrpInitialize( CONTEXT *context )
 {
+#ifdef MADEIRA_SE_WOW64_HOST
+    (void)context;
+    thread_init();
+    cpu_simulate();
+#else
     static RTL_RUN_ONCE init_done;
 
     RtlRunOnceExecuteOnce( &init_done, process_init, NULL, NULL );
     thread_init();
     cpu_simulate();
+#endif
 }
 
 

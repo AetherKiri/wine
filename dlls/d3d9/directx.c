@@ -21,7 +21,69 @@
 
 #include "d3d9_private.h"
 
+#include <errno.h>
+#include <stdlib.h>
+#include <string.h>
+
 WINE_DEFAULT_DEBUG_CHANNEL(d3d9);
+
+/* Some older titles require a mode that is not present in the host display
+ * list. Keep the compatibility mode explicit and opt-in; the renderer still
+ * uses the normal wined3d path and the mode is only advertised to the guest. */
+static BOOL d3d9_get_virtual_mode(UINT *width, UINT *height)
+{
+    char value[32];
+    char *end;
+    const char *separator;
+    DWORD length;
+    unsigned long parsed_width, parsed_height;
+
+    if (!width || !height) return FALSE;
+    length = GetEnvironmentVariableA("MADEIRA_SE_D3D9_VIRTUAL_MODE",
+            value, sizeof(value));
+    if (!length || length >= sizeof(value)) return FALSE;
+    if (!strcmp(value, "1"))
+    {
+        *width = 1920;
+        *height = 1080;
+        return TRUE;
+    }
+
+    separator = strchr(value, 'x');
+    if (!separator || separator == value || !separator[1] || strchr(separator + 1, 'x'))
+        return FALSE;
+
+    errno = 0;
+    parsed_width = strtoul(value, &end, 10);
+    if (errno || end != separator) return FALSE;
+    errno = 0;
+    parsed_height = strtoul(separator + 1, &end, 10);
+    if (errno || *end || parsed_width < 320 || parsed_width > 7680 ||
+        parsed_height < 200 || parsed_height > 4320)
+        return FALSE;
+
+    *width = (UINT)parsed_width;
+    *height = (UINT)parsed_height;
+    return TRUE;
+}
+
+static BOOL d3d9_has_virtual_mode(D3DFORMAT format)
+{
+    UINT width, height;
+
+    return d3d9_get_virtual_mode(&width, &height)
+            && (format == D3DFMT_X8R8G8B8 || format == D3DFMT_R5G6B5);
+}
+
+static void d3d9_trace_virtual_mode(const char *operation, UINT adapter, UINT mode_idx,
+        UINT width, UINT height)
+{
+    static LONG reported;
+
+    if (InterlockedExchange(&reported, 1) == 0)
+        TRACE("[d3d9-mock] %s adapter=%u mode=%u virtual=%ux%u\n",
+                operation, adapter, mode_idx, width, height);
+}
 
 static inline struct d3d9 *impl_from_IDirect3D9Ex(IDirect3D9Ex *iface)
 {
@@ -181,6 +243,9 @@ static UINT WINAPI d3d9_GetAdapterModeCount(IDirect3D9Ex *iface, UINT adapter, D
             wined3dformat_from_d3dformat(format), WINED3D_SCANLINE_ORDERING_UNKNOWN, true);
     wined3d_mutex_unlock();
 
+    if (d3d9_has_virtual_mode(format))
+        ++count;
+
     return count;
 }
 
@@ -189,6 +254,7 @@ static HRESULT WINAPI d3d9_EnumAdapterModes(IDirect3D9Ex *iface, UINT adapter,
 {
     struct d3d9 *d3d9 = impl_from_IDirect3D9Ex(iface);
     struct wined3d_display_mode wined3d_mode;
+    UINT virtual_width, virtual_height;
     unsigned int output_idx;
     HRESULT hr;
 
@@ -203,6 +269,21 @@ static HRESULT WINAPI d3d9_EnumAdapterModes(IDirect3D9Ex *iface, UINT adapter,
         return D3DERR_INVALIDCALL;
 
     wined3d_mutex_lock();
+    if (d3d9_get_virtual_mode(&virtual_width, &virtual_height)
+            && (format == D3DFMT_X8R8G8B8 || format == D3DFMT_R5G6B5)
+            && mode_idx == wined3d_output_get_mode_count(d3d9->wined3d_outputs[output_idx],
+                    wined3dformat_from_d3dformat(format), WINED3D_SCANLINE_ORDERING_UNKNOWN, true))
+    {
+        wined3d_mutex_unlock();
+        mode->Width = virtual_width;
+        mode->Height = virtual_height;
+        mode->RefreshRate = 60;
+        mode->Format = format;
+        d3d9_trace_virtual_mode("EnumAdapterModes", adapter, mode_idx,
+                virtual_width, virtual_height);
+        return D3D_OK;
+    }
+
     hr = wined3d_output_get_mode(d3d9->wined3d_outputs[output_idx], wined3dformat_from_d3dformat(format),
             WINED3D_SCANLINE_ORDERING_UNKNOWN, mode_idx, &wined3d_mode, true);
     wined3d_mutex_unlock();
@@ -222,6 +303,7 @@ static HRESULT WINAPI d3d9_GetAdapterDisplayMode(IDirect3D9Ex *iface, UINT adapt
 {
     struct d3d9 *d3d9 = impl_from_IDirect3D9Ex(iface);
     struct wined3d_display_mode wined3d_mode;
+    UINT virtual_width, virtual_height;
     unsigned int output_idx;
     HRESULT hr;
 
@@ -230,6 +312,20 @@ static HRESULT WINAPI d3d9_GetAdapterDisplayMode(IDirect3D9Ex *iface, UINT adapt
     output_idx = adapter;
     if (output_idx >= d3d9->wined3d_output_count)
         return D3DERR_INVALIDCALL;
+
+    /* Keep the reported desktop mode consistent with the opt-in virtual mode.
+     * Some legacy launchers reject the adapter before creating a device when
+     * this value does not match one of the modes they require. */
+    if (d3d9_get_virtual_mode(&virtual_width, &virtual_height))
+    {
+        mode->Width = virtual_width;
+        mode->Height = virtual_height;
+        mode->RefreshRate = 60;
+        mode->Format = D3DFMT_X8R8G8B8;
+        d3d9_trace_virtual_mode("GetAdapterDisplayMode", adapter, 0,
+                virtual_width, virtual_height);
+        return D3D_OK;
+    }
 
     wined3d_mutex_lock();
     hr = wined3d_output_get_display_mode(d3d9->wined3d_outputs[output_idx], &wined3d_mode, NULL);
@@ -529,6 +625,9 @@ static UINT WINAPI d3d9_GetAdapterModeCountEx(IDirect3D9Ex *iface,
             wined3dformat_from_d3dformat(filter->Format), wined3d_scanline_ordering_from_d3d(filter->ScanLineOrdering), true);
     wined3d_mutex_unlock();
 
+    if (d3d9_has_virtual_mode(filter->Format))
+        ++count;
+
     return count;
 }
 
@@ -537,6 +636,7 @@ static HRESULT WINAPI d3d9_EnumAdapterModesEx(IDirect3D9Ex *iface,
 {
     struct d3d9 *d3d9 = impl_from_IDirect3D9Ex(iface);
     struct wined3d_display_mode wined3d_mode;
+    UINT virtual_width, virtual_height;
     unsigned int output_idx;
     HRESULT hr;
 
@@ -551,6 +651,23 @@ static HRESULT WINAPI d3d9_EnumAdapterModesEx(IDirect3D9Ex *iface,
         return D3DERR_INVALIDCALL;
 
     wined3d_mutex_lock();
+    if (d3d9_get_virtual_mode(&virtual_width, &virtual_height)
+            && (filter->Format == D3DFMT_X8R8G8B8 || filter->Format == D3DFMT_R5G6B5)
+            && mode_idx == wined3d_output_get_mode_count(d3d9->wined3d_outputs[output_idx],
+                    wined3dformat_from_d3dformat(filter->Format),
+                    wined3d_scanline_ordering_from_d3d(filter->ScanLineOrdering), true))
+    {
+        wined3d_mutex_unlock();
+        mode->Width = virtual_width;
+        mode->Height = virtual_height;
+        mode->RefreshRate = 60;
+        mode->Format = filter->Format;
+        mode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
+        d3d9_trace_virtual_mode("EnumAdapterModesEx", adapter, mode_idx,
+                virtual_width, virtual_height);
+        return D3D_OK;
+    }
+
     hr = wined3d_output_get_mode(d3d9->wined3d_outputs[output_idx], wined3dformat_from_d3dformat(filter->Format),
             wined3d_scanline_ordering_from_d3d(filter->ScanLineOrdering), mode_idx, &wined3d_mode, true);
     wined3d_mutex_unlock();
@@ -572,6 +689,7 @@ static HRESULT WINAPI d3d9_GetAdapterDisplayModeEx(IDirect3D9Ex *iface,
 {
     struct d3d9 *d3d9 = impl_from_IDirect3D9Ex(iface);
     struct wined3d_display_mode wined3d_mode;
+    UINT virtual_width, virtual_height;
     unsigned int output_idx;
     HRESULT hr;
 
@@ -584,6 +702,19 @@ static HRESULT WINAPI d3d9_GetAdapterDisplayModeEx(IDirect3D9Ex *iface,
 
     if (mode->Size != sizeof(*mode))
         return D3DERR_INVALIDCALL;
+
+    if (d3d9_get_virtual_mode(&virtual_width, &virtual_height))
+    {
+        mode->Width = virtual_width;
+        mode->Height = virtual_height;
+        mode->RefreshRate = 60;
+        mode->Format = D3DFMT_X8R8G8B8;
+        mode->ScanLineOrdering = D3DSCANLINEORDERING_PROGRESSIVE;
+        if (rotation) *rotation = D3DDISPLAYROTATION_IDENTITY;
+        d3d9_trace_virtual_mode("GetAdapterDisplayModeEx", adapter, 0,
+                virtual_width, virtual_height);
+        return D3D_OK;
+    }
 
     wined3d_mutex_lock();
     hr = wined3d_output_get_display_mode(d3d9->wined3d_outputs[output_idx], &wined3d_mode,
@@ -612,6 +743,15 @@ static HRESULT WINAPI DECLSPEC_HOTPATCH d3d9_CreateDeviceEx(IDirect3D9Ex *iface,
 
     TRACE("iface %p, adapter %u, device_type %#x, focus_window %p, flags %#lx, parameters %p, mode %p, device %p.\n",
             iface, adapter, device_type, focus_window, flags, parameters, mode, device);
+
+    if (GetEnvironmentVariableA("MADEIRA_SE_D3D9_DIAGNOSTICS", NULL, 0))
+    {
+        ERR("[madeira-d3d9] CreateDevice windowed=%#x backbuffer=%ux%u format=%#x count=%u "
+                "swap=%#x device_window=%p focus_window=%p.\n",
+                parameters->Windowed, parameters->BackBufferWidth, parameters->BackBufferHeight,
+                parameters->BackBufferFormat, parameters->BackBufferCount, parameters->SwapEffect,
+                parameters->hDeviceWindow, focus_window);
+    }
 
     if (!(object = calloc(1, sizeof(*object))))
         return E_OUTOFMEMORY;

@@ -15,6 +15,7 @@
 #include "unixlib.h"
 #include "unix_private.h"
 
+#include "wine/madeira_se.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(opengl);
@@ -39619,7 +39620,7 @@ static NTSTATUS wow64_ext_glAsyncCopyBufferSubDataNVX( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glAsyncCopyBufferSubDataNVX) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_glAsyncCopyBufferSubDataNVX( params->waitSemaphoreCount, ULongToPtr(params->waitSemaphoreArray), ULongToPtr(params->fenceValueArray), params->readGpu, params->writeGpuMask, params->readBuffer, params->writeBuffer, (GLintptr)ULongToPtr(params->readOffset), (GLintptr)ULongToPtr(params->writeOffset), (GLsizeiptr)ULongToPtr(params->size), params->signalSemaphoreCount, ULongToPtr(params->signalSemaphoreArray), ULongToPtr(params->signalValueArray) );
+    params->ret = funcs->p_glAsyncCopyBufferSubDataNVX( params->waitSemaphoreCount, ULongToPtr(params->waitSemaphoreArray), ULongToPtr(params->fenceValueArray), params->readGpu, params->writeGpuMask, params->readBuffer, params->writeBuffer, (GLintptr)madeira_se_wow64_widen_integer(params->readOffset), (GLintptr)madeira_se_wow64_widen_integer(params->writeOffset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->signalSemaphoreCount, ULongToPtr(params->signalSemaphoreArray), ULongToPtr(params->signalValueArray) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -40068,7 +40069,7 @@ static NTSTATUS wow64_ext_glBindBufferOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBindBufferOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBindBufferOffsetEXT( params->target, params->index, params->buffer, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glBindBufferOffsetEXT( params->target, params->index, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -40086,7 +40087,7 @@ static NTSTATUS wow64_ext_glBindBufferOffsetNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBindBufferOffsetNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBindBufferOffsetNV( params->target, params->index, params->buffer, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glBindBufferOffsetNV( params->target, params->index, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -40105,7 +40106,7 @@ static NTSTATUS wow64_ext_glBindBufferRange( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBindBufferRange) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBindBufferRange( params->target, params->index, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glBindBufferRange( params->target, params->index, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -40124,7 +40125,7 @@ static NTSTATUS wow64_ext_glBindBufferRangeEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBindBufferRangeEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBindBufferRangeEXT( params->target, params->index, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glBindBufferRangeEXT( params->target, params->index, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -40143,7 +40144,7 @@ static NTSTATUS wow64_ext_glBindBufferRangeNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBindBufferRangeNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBindBufferRangeNV( params->target, params->index, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glBindBufferRangeNV( params->target, params->index, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -40709,7 +40710,7 @@ static NTSTATUS wow64_ext_glBindVertexBuffer( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBindVertexBuffer) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBindVertexBuffer( params->bindingindex, params->buffer, (GLintptr)ULongToPtr(params->offset), params->stride );
+    funcs->p_glBindVertexBuffer( params->bindingindex, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -40764,7 +40765,7 @@ static NTSTATUS wow64_ext_glBindVideoCaptureStreamBufferNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBindVideoCaptureStreamBufferNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBindVideoCaptureStreamBufferNV( params->video_capture_slot, params->stream, params->frame_region, (GLintptrARB)ULongToPtr(params->offset) );
+    funcs->p_glBindVideoCaptureStreamBufferNV( params->video_capture_slot, params->stream, params->frame_region, (GLintptrARB)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -41562,7 +41563,7 @@ static NTSTATUS wow64_ext_glBufferAddressRangeNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBufferAddressRangeNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBufferAddressRangeNV( params->pname, params->index, params->address, (GLsizeiptr)ULongToPtr(params->length) );
+    funcs->p_glBufferAddressRangeNV( params->pname, params->index, params->address, (GLsizeiptr)madeira_se_wow64_widen_integer(params->length) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -41605,7 +41606,7 @@ static NTSTATUS wow64_ext_glBufferData( void *args )
     if (!funcs->p_glBufferData) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_target( teb, params->target );
-    funcs->p_glBufferData( params->target, (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data), params->usage );
+    funcs->p_glBufferData( params->target, (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data), params->usage );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -41628,7 +41629,7 @@ static NTSTATUS wow64_ext_glBufferDataARB( void *args )
     if (!funcs->p_glBufferDataARB) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_target( teb, params->target );
-    funcs->p_glBufferDataARB( params->target, (GLsizeiptrARB)ULongToPtr(params->size), ULongToPtr(params->data), params->usage );
+    funcs->p_glBufferDataARB( params->target, (GLsizeiptrARB)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data), params->usage );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -41648,7 +41649,7 @@ static NTSTATUS wow64_ext_glBufferPageCommitmentARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBufferPageCommitmentARB) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBufferPageCommitmentARB( params->target, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), params->commit );
+    funcs->p_glBufferPageCommitmentARB( params->target, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->commit );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -41668,7 +41669,7 @@ static NTSTATUS wow64_ext_glBufferPageCommitmentMemNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBufferPageCommitmentMemNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBufferPageCommitmentMemNV( params->target, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), params->memory, params->memOffset, params->commit );
+    funcs->p_glBufferPageCommitmentMemNV( params->target, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->memory, params->memOffset, params->commit );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -41721,7 +41722,7 @@ static NTSTATUS wow64_ext_glBufferStorage( void *args )
     if (!funcs->p_glBufferStorage) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_target( teb, params->target );
-    wow64_glBufferStorage( teb, params->target, (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data), params->flags );
+    wow64_glBufferStorage( teb, params->target, (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data), params->flags );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -41745,7 +41746,7 @@ static NTSTATUS wow64_ext_glBufferStorageExternalEXT( void *args )
     if (!funcs->p_glBufferStorageExternalEXT) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_target( teb, params->target );
-    funcs->p_glBufferStorageExternalEXT( params->target, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->clientBuffer), params->flags );
+    funcs->p_glBufferStorageExternalEXT( params->target, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->clientBuffer), params->flags );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -41768,7 +41769,7 @@ static NTSTATUS wow64_ext_glBufferStorageMemEXT( void *args )
     if (!funcs->p_glBufferStorageMemEXT) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_target( teb, params->target );
-    funcs->p_glBufferStorageMemEXT( params->target, (GLsizeiptr)ULongToPtr(params->size), params->memory, params->offset );
+    funcs->p_glBufferStorageMemEXT( params->target, (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->memory, params->offset );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -41788,7 +41789,7 @@ static NTSTATUS wow64_ext_glBufferSubData( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBufferSubData) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBufferSubData( params->target, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glBufferSubData( params->target, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -41806,7 +41807,7 @@ static NTSTATUS wow64_ext_glBufferSubDataARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glBufferSubDataARB) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glBufferSubDataARB( params->target, (GLintptrARB)ULongToPtr(params->offset), (GLsizeiptrARB)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glBufferSubDataARB( params->target, (GLintptrARB)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptrARB)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -41981,7 +41982,7 @@ static NTSTATUS wow64_ext_glClearBufferSubData( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glClearBufferSubData) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glClearBufferSubData( params->target, params->internalformat, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), params->format, params->type, ULongToPtr(params->data) );
+    funcs->p_glClearBufferSubData( params->target, params->internalformat, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->format, params->type, ULongToPtr(params->data) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -42256,7 +42257,7 @@ static NTSTATUS wow64_ext_glClearNamedBufferSubData( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glClearNamedBufferSubData) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glClearNamedBufferSubData( params->buffer, params->internalformat, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), params->format, params->type, ULongToPtr(params->data) );
+    funcs->p_glClearNamedBufferSubData( params->buffer, params->internalformat, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->format, params->type, ULongToPtr(params->data) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -42277,7 +42278,7 @@ static NTSTATUS wow64_ext_glClearNamedBufferSubDataEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glClearNamedBufferSubDataEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glClearNamedBufferSubDataEXT( params->buffer, params->internalformat, (GLsizeiptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), params->format, params->type, ULongToPtr(params->data) );
+    funcs->p_glClearNamedBufferSubDataEXT( params->buffer, params->internalformat, (GLsizeiptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->format, params->type, ULongToPtr(params->data) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -44412,7 +44413,7 @@ static NTSTATUS wow64_ext_glCopyBufferSubData( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glCopyBufferSubData) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glCopyBufferSubData( params->readTarget, params->writeTarget, (GLintptr)ULongToPtr(params->readOffset), (GLintptr)ULongToPtr(params->writeOffset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glCopyBufferSubData( params->readTarget, params->writeTarget, (GLintptr)madeira_se_wow64_widen_integer(params->readOffset), (GLintptr)madeira_se_wow64_widen_integer(params->writeOffset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -44757,7 +44758,7 @@ static NTSTATUS wow64_ext_glCopyNamedBufferSubData( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glCopyNamedBufferSubData) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glCopyNamedBufferSubData( params->readBuffer, params->writeBuffer, (GLintptr)ULongToPtr(params->readOffset), (GLintptr)ULongToPtr(params->writeOffset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glCopyNamedBufferSubData( params->readBuffer, params->writeBuffer, (GLintptr)madeira_se_wow64_widen_integer(params->readOffset), (GLintptr)madeira_se_wow64_widen_integer(params->writeOffset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -45501,7 +45502,7 @@ static NTSTATUS wow64_ext_glCreateSyncFromCLeventARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glCreateSyncFromCLeventARB) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wrap_glCreateSyncFromCLeventARB( teb, ULongToPtr(params->context), ULongToPtr(params->event), params->flags, UlongToHandle( params->ret ) );
+    params->ret = (UINT_PTR)wrap_glCreateSyncFromCLeventARB( teb, ULongToPtr(params->context), ULongToPtr(params->event), params->flags, ULongToPtr( params->ret ) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -46904,7 +46905,7 @@ static NTSTATUS wow64_ext_glDispatchComputeIndirect( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glDispatchComputeIndirect) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glDispatchComputeIndirect( (GLintptr)ULongToPtr(params->indirect) );
+    funcs->p_glDispatchComputeIndirect( (GLintptr)madeira_se_wow64_widen_integer(params->indirect) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -47398,7 +47399,7 @@ static NTSTATUS wow64_ext_glDrawMeshTasksIndirectEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glDrawMeshTasksIndirectEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glDrawMeshTasksIndirectEXT( (GLintptr)ULongToPtr(params->indirect) );
+    funcs->p_glDrawMeshTasksIndirectEXT( (GLintptr)madeira_se_wow64_widen_integer(params->indirect) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -47413,7 +47414,7 @@ static NTSTATUS wow64_ext_glDrawMeshTasksIndirectNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glDrawMeshTasksIndirectNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glDrawMeshTasksIndirectNV( (GLintptr)ULongToPtr(params->indirect) );
+    funcs->p_glDrawMeshTasksIndirectNV( (GLintptr)madeira_se_wow64_widen_integer(params->indirect) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -48321,7 +48322,7 @@ static NTSTATUS wow64_ext_glFenceSync( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glFenceSync) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wrap_glFenceSync( teb, params->condition, params->flags, UlongToHandle( params->ret ) );
+    params->ret = (UINT_PTR)wrap_glFenceSync( teb, params->condition, params->flags, ULongToPtr( params->ret ) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -48432,7 +48433,7 @@ static NTSTATUS wow64_ext_glFlushMappedBufferRange( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glFlushMappedBufferRange) return STATUS_NOT_IMPLEMENTED;
-    wow64_glFlushMappedBufferRange( teb, params->target, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->length) );
+    wow64_glFlushMappedBufferRange( teb, params->target, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->length) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -48449,7 +48450,7 @@ static NTSTATUS wow64_ext_glFlushMappedBufferRangeAPPLE( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glFlushMappedBufferRangeAPPLE) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glFlushMappedBufferRangeAPPLE( params->target, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glFlushMappedBufferRangeAPPLE( params->target, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -48466,7 +48467,7 @@ static NTSTATUS wow64_ext_glFlushMappedNamedBufferRange( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glFlushMappedNamedBufferRange) return STATUS_NOT_IMPLEMENTED;
-    wow64_glFlushMappedNamedBufferRange( teb, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->length) );
+    wow64_glFlushMappedNamedBufferRange( teb, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->length) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -48483,7 +48484,7 @@ static NTSTATUS wow64_ext_glFlushMappedNamedBufferRangeEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glFlushMappedNamedBufferRangeEXT) return STATUS_NOT_IMPLEMENTED;
-    wow64_glFlushMappedNamedBufferRangeEXT( teb, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->length) );
+    wow64_glFlushMappedNamedBufferRangeEXT( teb, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->length) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -50766,7 +50767,7 @@ static NTSTATUS wow64_ext_glGetBufferSubData( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glGetBufferSubData) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glGetBufferSubData( params->target, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glGetBufferSubData( params->target, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     return STATUS_SUCCESS;
 }
 
@@ -50783,7 +50784,7 @@ static NTSTATUS wow64_ext_glGetBufferSubDataARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glGetBufferSubDataARB) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glGetBufferSubDataARB( params->target, (GLintptrARB)ULongToPtr(params->offset), (GLsizeiptrARB)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glGetBufferSubDataARB( params->target, (GLintptrARB)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptrARB)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     return STATUS_SUCCESS;
 }
 
@@ -53033,7 +53034,7 @@ static NTSTATUS wow64_ext_glGetNamedBufferSubData( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glGetNamedBufferSubData) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glGetNamedBufferSubData( params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glGetNamedBufferSubData( params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     return STATUS_SUCCESS;
 }
 
@@ -53050,7 +53051,7 @@ static NTSTATUS wow64_ext_glGetNamedBufferSubDataEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glGetNamedBufferSubDataEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glGetNamedBufferSubDataEXT( params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glGetNamedBufferSubDataEXT( params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     return STATUS_SUCCESS;
 }
 
@@ -54538,7 +54539,7 @@ static NTSTATUS wow64_ext_glGetQueryBufferObjecti64v( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glGetQueryBufferObjecti64v) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glGetQueryBufferObjecti64v( params->id, params->buffer, params->pname, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glGetQueryBufferObjecti64v( params->id, params->buffer, params->pname, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     return STATUS_SUCCESS;
 }
 
@@ -54555,7 +54556,7 @@ static NTSTATUS wow64_ext_glGetQueryBufferObjectiv( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glGetQueryBufferObjectiv) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glGetQueryBufferObjectiv( params->id, params->buffer, params->pname, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glGetQueryBufferObjectiv( params->id, params->buffer, params->pname, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     return STATUS_SUCCESS;
 }
 
@@ -54572,7 +54573,7 @@ static NTSTATUS wow64_ext_glGetQueryBufferObjectui64v( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glGetQueryBufferObjectui64v) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glGetQueryBufferObjectui64v( params->id, params->buffer, params->pname, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glGetQueryBufferObjectui64v( params->id, params->buffer, params->pname, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     return STATUS_SUCCESS;
 }
 
@@ -54589,7 +54590,7 @@ static NTSTATUS wow64_ext_glGetQueryBufferObjectuiv( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glGetQueryBufferObjectuiv) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glGetQueryBufferObjectuiv( params->id, params->buffer, params->pname, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glGetQueryBufferObjectuiv( params->id, params->buffer, params->pname, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     return STATUS_SUCCESS;
 }
 
@@ -57872,7 +57873,7 @@ static NTSTATUS wow64_ext_glImportSyncEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glImportSyncEXT) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wrap_glImportSyncEXT( teb, params->external_sync_type, (GLintptr)ULongToPtr(params->external_sync), params->flags, UlongToHandle( params->ret ) );
+    params->ret = (UINT_PTR)wrap_glImportSyncEXT( teb, params->external_sync_type, (GLintptr)madeira_se_wow64_widen_integer(params->external_sync), params->flags, ULongToPtr( params->ret ) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -58081,7 +58082,7 @@ static NTSTATUS wow64_ext_glInvalidateBufferSubData( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glInvalidateBufferSubData) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glInvalidateBufferSubData( params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->length) );
+    funcs->p_glInvalidateBufferSubData( params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->length) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -58934,7 +58935,7 @@ static NTSTATUS wow64_ext_glLGPUNamedBufferSubDataNVX( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glLGPUNamedBufferSubDataNVX) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glLGPUNamedBufferSubDataNVX( params->gpuMask, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glLGPUNamedBufferSubDataNVX( params->gpuMask, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -59720,7 +59721,7 @@ static NTSTATUS wow64_ext_glMapBufferRange( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMapBufferRange) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wow64_glMapBufferRange( teb, params->target, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->length), params->access );
+    params->ret = (UINT_PTR)wow64_glMapBufferRange( teb, params->target, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->length), params->access );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -59832,7 +59833,7 @@ static NTSTATUS wow64_ext_glMapNamedBufferRange( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMapNamedBufferRange) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wow64_glMapNamedBufferRange( teb, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->length), params->access );
+    params->ret = (UINT_PTR)wow64_glMapNamedBufferRange( teb, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->length), params->access );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -59851,7 +59852,7 @@ static NTSTATUS wow64_ext_glMapNamedBufferRangeEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMapNamedBufferRangeEXT) return STATUS_NOT_IMPLEMENTED;
-    params->ret = (UINT_PTR)wow64_glMapNamedBufferRangeEXT( teb, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->length), params->access );
+    params->ret = (UINT_PTR)wow64_glMapNamedBufferRangeEXT( teb, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->length), params->access );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -60951,7 +60952,7 @@ static NTSTATUS wow64_ext_glMultiDrawArraysIndirectCount( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMultiDrawArraysIndirectCount) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMultiDrawArraysIndirectCount( params->mode, ULongToPtr(params->indirect), (GLintptr)ULongToPtr(params->drawcount), params->maxdrawcount, params->stride );
+    funcs->p_glMultiDrawArraysIndirectCount( params->mode, ULongToPtr(params->indirect), (GLintptr)madeira_se_wow64_widen_integer(params->drawcount), params->maxdrawcount, params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -60970,7 +60971,7 @@ static NTSTATUS wow64_ext_glMultiDrawArraysIndirectCountARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMultiDrawArraysIndirectCountARB) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMultiDrawArraysIndirectCountARB( params->mode, ULongToPtr(params->indirect), (GLintptr)ULongToPtr(params->drawcount), params->maxdrawcount, params->stride );
+    funcs->p_glMultiDrawArraysIndirectCountARB( params->mode, ULongToPtr(params->indirect), (GLintptr)madeira_se_wow64_widen_integer(params->drawcount), params->maxdrawcount, params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -61154,7 +61155,7 @@ static NTSTATUS wow64_ext_glMultiDrawElementsIndirectCount( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMultiDrawElementsIndirectCount) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMultiDrawElementsIndirectCount( params->mode, params->type, ULongToPtr(params->indirect), (GLintptr)ULongToPtr(params->drawcount), params->maxdrawcount, params->stride );
+    funcs->p_glMultiDrawElementsIndirectCount( params->mode, params->type, ULongToPtr(params->indirect), (GLintptr)madeira_se_wow64_widen_integer(params->drawcount), params->maxdrawcount, params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -61174,7 +61175,7 @@ static NTSTATUS wow64_ext_glMultiDrawElementsIndirectCountARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMultiDrawElementsIndirectCountARB) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMultiDrawElementsIndirectCountARB( params->mode, params->type, ULongToPtr(params->indirect), (GLintptr)ULongToPtr(params->drawcount), params->maxdrawcount, params->stride );
+    funcs->p_glMultiDrawElementsIndirectCountARB( params->mode, params->type, ULongToPtr(params->indirect), (GLintptr)madeira_se_wow64_widen_integer(params->drawcount), params->maxdrawcount, params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -61192,7 +61193,7 @@ static NTSTATUS wow64_ext_glMultiDrawMeshTasksIndirectCountEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMultiDrawMeshTasksIndirectCountEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMultiDrawMeshTasksIndirectCountEXT( (GLintptr)ULongToPtr(params->indirect), (GLintptr)ULongToPtr(params->drawcount), params->maxdrawcount, params->stride );
+    funcs->p_glMultiDrawMeshTasksIndirectCountEXT( (GLintptr)madeira_se_wow64_widen_integer(params->indirect), (GLintptr)madeira_se_wow64_widen_integer(params->drawcount), params->maxdrawcount, params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -61210,7 +61211,7 @@ static NTSTATUS wow64_ext_glMultiDrawMeshTasksIndirectCountNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMultiDrawMeshTasksIndirectCountNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMultiDrawMeshTasksIndirectCountNV( (GLintptr)ULongToPtr(params->indirect), (GLintptr)ULongToPtr(params->drawcount), params->maxdrawcount, params->stride );
+    funcs->p_glMultiDrawMeshTasksIndirectCountNV( (GLintptr)madeira_se_wow64_widen_integer(params->indirect), (GLintptr)madeira_se_wow64_widen_integer(params->drawcount), params->maxdrawcount, params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -61227,7 +61228,7 @@ static NTSTATUS wow64_ext_glMultiDrawMeshTasksIndirectEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMultiDrawMeshTasksIndirectEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMultiDrawMeshTasksIndirectEXT( (GLintptr)ULongToPtr(params->indirect), params->drawcount, params->stride );
+    funcs->p_glMultiDrawMeshTasksIndirectEXT( (GLintptr)madeira_se_wow64_widen_integer(params->indirect), params->drawcount, params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -61244,7 +61245,7 @@ static NTSTATUS wow64_ext_glMultiDrawMeshTasksIndirectNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMultiDrawMeshTasksIndirectNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMultiDrawMeshTasksIndirectNV( (GLintptr)ULongToPtr(params->indirect), params->drawcount, params->stride );
+    funcs->p_glMultiDrawMeshTasksIndirectNV( (GLintptr)madeira_se_wow64_widen_integer(params->indirect), params->drawcount, params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -64035,7 +64036,7 @@ static NTSTATUS wow64_ext_glMulticastBufferSubDataNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMulticastBufferSubDataNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMulticastBufferSubDataNV( params->gpuMask, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glMulticastBufferSubDataNV( params->gpuMask, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -64056,7 +64057,7 @@ static NTSTATUS wow64_ext_glMulticastCopyBufferSubDataNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glMulticastCopyBufferSubDataNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glMulticastCopyBufferSubDataNV( params->readGpu, params->writeGpuMask, params->readBuffer, params->writeBuffer, (GLintptr)ULongToPtr(params->readOffset), (GLintptr)ULongToPtr(params->writeOffset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glMulticastCopyBufferSubDataNV( params->readGpu, params->writeGpuMask, params->readBuffer, params->writeBuffer, (GLintptr)madeira_se_wow64_widen_integer(params->readOffset), (GLintptr)madeira_se_wow64_widen_integer(params->writeOffset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -64291,7 +64292,7 @@ static NTSTATUS wow64_ext_glNamedBufferData( void *args )
     if (!funcs->p_glNamedBufferData) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_name( teb, params->buffer );
-    funcs->p_glNamedBufferData( params->buffer, (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data), params->usage );
+    funcs->p_glNamedBufferData( params->buffer, (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data), params->usage );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -64314,7 +64315,7 @@ static NTSTATUS wow64_ext_glNamedBufferDataEXT( void *args )
     if (!funcs->p_glNamedBufferDataEXT) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_name( teb, params->buffer );
-    funcs->p_glNamedBufferDataEXT( params->buffer, (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data), params->usage );
+    funcs->p_glNamedBufferDataEXT( params->buffer, (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data), params->usage );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -64334,7 +64335,7 @@ static NTSTATUS wow64_ext_glNamedBufferPageCommitmentARB( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glNamedBufferPageCommitmentARB) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glNamedBufferPageCommitmentARB( params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), params->commit );
+    funcs->p_glNamedBufferPageCommitmentARB( params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->commit );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -64352,7 +64353,7 @@ static NTSTATUS wow64_ext_glNamedBufferPageCommitmentEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glNamedBufferPageCommitmentEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glNamedBufferPageCommitmentEXT( params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), params->commit );
+    funcs->p_glNamedBufferPageCommitmentEXT( params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->commit );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -64372,7 +64373,7 @@ static NTSTATUS wow64_ext_glNamedBufferPageCommitmentMemNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glNamedBufferPageCommitmentMemNV) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glNamedBufferPageCommitmentMemNV( params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), params->memory, params->memOffset, params->commit );
+    funcs->p_glNamedBufferPageCommitmentMemNV( params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->memory, params->memOffset, params->commit );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -64393,7 +64394,7 @@ static NTSTATUS wow64_ext_glNamedBufferStorage( void *args )
     if (!funcs->p_glNamedBufferStorage) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_name( teb, params->buffer );
-    wow64_glNamedBufferStorage( teb, params->buffer, (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data), params->flags );
+    wow64_glNamedBufferStorage( teb, params->buffer, (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data), params->flags );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -64416,7 +64417,7 @@ static NTSTATUS wow64_ext_glNamedBufferStorageEXT( void *args )
     if (!funcs->p_glNamedBufferStorageEXT) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_name( teb, params->buffer );
-    wow64_glNamedBufferStorageEXT( teb, params->buffer, (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data), params->flags );
+    wow64_glNamedBufferStorageEXT( teb, params->buffer, (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data), params->flags );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -64440,7 +64441,7 @@ static NTSTATUS wow64_ext_glNamedBufferStorageExternalEXT( void *args )
     if (!funcs->p_glNamedBufferStorageExternalEXT) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_name( teb, params->buffer );
-    funcs->p_glNamedBufferStorageExternalEXT( params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->clientBuffer), params->flags );
+    funcs->p_glNamedBufferStorageExternalEXT( params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->clientBuffer), params->flags );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -64463,7 +64464,7 @@ static NTSTATUS wow64_ext_glNamedBufferStorageMemEXT( void *args )
     if (!funcs->p_glNamedBufferStorageMemEXT) return STATUS_NOT_IMPLEMENTED;
     pthread_mutex_lock( &wgl_lock );
     buffer = invalidate_buffer_name( teb, params->buffer );
-    funcs->p_glNamedBufferStorageMemEXT( params->buffer, (GLsizeiptr)ULongToPtr(params->size), params->memory, params->offset );
+    funcs->p_glNamedBufferStorageMemEXT( params->buffer, (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), params->memory, params->offset );
     pthread_mutex_unlock( &wgl_lock );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     if (buffer) free_buffer( funcs, buffer );
@@ -64483,7 +64484,7 @@ static NTSTATUS wow64_ext_glNamedBufferSubData( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glNamedBufferSubData) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glNamedBufferSubData( params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glNamedBufferSubData( params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -64501,7 +64502,7 @@ static NTSTATUS wow64_ext_glNamedBufferSubDataEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glNamedBufferSubDataEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glNamedBufferSubDataEXT( params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size), ULongToPtr(params->data) );
+    funcs->p_glNamedBufferSubDataEXT( params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size), ULongToPtr(params->data) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -64520,7 +64521,7 @@ static NTSTATUS wow64_ext_glNamedCopyBufferSubDataEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glNamedCopyBufferSubDataEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glNamedCopyBufferSubDataEXT( params->readBuffer, params->writeBuffer, (GLintptr)ULongToPtr(params->readOffset), (GLintptr)ULongToPtr(params->writeOffset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glNamedCopyBufferSubDataEXT( params->readBuffer, params->writeBuffer, (GLintptr)madeira_se_wow64_widen_integer(params->readOffset), (GLintptr)madeira_se_wow64_widen_integer(params->writeOffset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -66119,7 +66120,7 @@ static NTSTATUS wow64_ext_glPathMemoryGlyphIndexArrayNV( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glPathMemoryGlyphIndexArrayNV) return STATUS_NOT_IMPLEMENTED;
-    params->ret = funcs->p_glPathMemoryGlyphIndexArrayNV( params->firstPathName, params->fontTarget, (GLsizeiptr)ULongToPtr(params->fontSize), ULongToPtr(params->fontData), params->faceIndex, params->firstGlyphIndex, params->numGlyphs, params->pathParameterTemplate, params->emScale );
+    params->ret = funcs->p_glPathMemoryGlyphIndexArrayNV( params->firstPathName, params->fontTarget, (GLsizeiptr)madeira_se_wow64_widen_integer(params->fontSize), ULongToPtr(params->fontData), params->faceIndex, params->firstGlyphIndex, params->numGlyphs, params->pathParameterTemplate, params->emScale );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -74089,7 +74090,7 @@ static NTSTATUS wow64_ext_glTexBufferRange( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glTexBufferRange) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glTexBufferRange( params->target, params->internalformat, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glTexBufferRange( params->target, params->internalformat, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -75955,7 +75956,7 @@ static NTSTATUS wow64_ext_glTextureBufferRange( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glTextureBufferRange) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glTextureBufferRange( params->texture, params->internalformat, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glTextureBufferRange( params->texture, params->internalformat, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -75975,7 +75976,7 @@ static NTSTATUS wow64_ext_glTextureBufferRangeEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glTextureBufferRangeEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glTextureBufferRangeEXT( params->texture, params->target, params->internalformat, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glTextureBufferRangeEXT( params->texture, params->target, params->internalformat, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -77057,7 +77058,7 @@ static NTSTATUS wow64_ext_glTransformFeedbackBufferRange( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glTransformFeedbackBufferRange) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glTransformFeedbackBufferRange( params->xfb, params->index, params->buffer, (GLintptr)ULongToPtr(params->offset), (GLsizeiptr)ULongToPtr(params->size) );
+    funcs->p_glTransformFeedbackBufferRange( params->xfb, params->index, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), (GLsizeiptr)madeira_se_wow64_widen_integer(params->size) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80215,7 +80216,7 @@ static NTSTATUS wow64_ext_glVertexArrayBindVertexBufferEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayBindVertexBufferEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayBindVertexBufferEXT( params->vaobj, params->bindingindex, params->buffer, (GLintptr)ULongToPtr(params->offset), params->stride );
+    funcs->p_glVertexArrayBindVertexBufferEXT( params->vaobj, params->bindingindex, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80252,7 +80253,7 @@ static NTSTATUS wow64_ext_glVertexArrayColorOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayColorOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayColorOffsetEXT( params->vaobj, params->buffer, params->size, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayColorOffsetEXT( params->vaobj, params->buffer, params->size, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80270,7 +80271,7 @@ static NTSTATUS wow64_ext_glVertexArrayEdgeFlagOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayEdgeFlagOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayEdgeFlagOffsetEXT( params->vaobj, params->buffer, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayEdgeFlagOffsetEXT( params->vaobj, params->buffer, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80305,7 +80306,7 @@ static NTSTATUS wow64_ext_glVertexArrayFogCoordOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayFogCoordOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayFogCoordOffsetEXT( params->vaobj, params->buffer, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayFogCoordOffsetEXT( params->vaobj, params->buffer, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80324,7 +80325,7 @@ static NTSTATUS wow64_ext_glVertexArrayIndexOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayIndexOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayIndexOffsetEXT( params->vaobj, params->buffer, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayIndexOffsetEXT( params->vaobj, params->buffer, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80345,7 +80346,7 @@ static NTSTATUS wow64_ext_glVertexArrayMultiTexCoordOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayMultiTexCoordOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayMultiTexCoordOffsetEXT( params->vaobj, params->buffer, params->texunit, params->size, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayMultiTexCoordOffsetEXT( params->vaobj, params->buffer, params->texunit, params->size, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80364,7 +80365,7 @@ static NTSTATUS wow64_ext_glVertexArrayNormalOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayNormalOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayNormalOffsetEXT( params->vaobj, params->buffer, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayNormalOffsetEXT( params->vaobj, params->buffer, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80432,7 +80433,7 @@ static NTSTATUS wow64_ext_glVertexArraySecondaryColorOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArraySecondaryColorOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArraySecondaryColorOffsetEXT( params->vaobj, params->buffer, params->size, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArraySecondaryColorOffsetEXT( params->vaobj, params->buffer, params->size, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80452,7 +80453,7 @@ static NTSTATUS wow64_ext_glVertexArrayTexCoordOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayTexCoordOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayTexCoordOffsetEXT( params->vaobj, params->buffer, params->size, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayTexCoordOffsetEXT( params->vaobj, params->buffer, params->size, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80546,7 +80547,7 @@ static NTSTATUS wow64_ext_glVertexArrayVertexAttribIOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayVertexAttribIOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayVertexAttribIOffsetEXT( params->vaobj, params->buffer, params->index, params->size, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayVertexAttribIOffsetEXT( params->vaobj, params->buffer, params->index, params->size, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80586,7 +80587,7 @@ static NTSTATUS wow64_ext_glVertexArrayVertexAttribLOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayVertexAttribLOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayVertexAttribLOffsetEXT( params->vaobj, params->buffer, params->index, params->size, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayVertexAttribLOffsetEXT( params->vaobj, params->buffer, params->index, params->size, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80608,7 +80609,7 @@ static NTSTATUS wow64_ext_glVertexArrayVertexAttribOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayVertexAttribOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayVertexAttribOffsetEXT( params->vaobj, params->buffer, params->index, params->size, params->type, params->normalized, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayVertexAttribOffsetEXT( params->vaobj, params->buffer, params->index, params->size, params->type, params->normalized, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80644,7 +80645,7 @@ static NTSTATUS wow64_ext_glVertexArrayVertexBuffer( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayVertexBuffer) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayVertexBuffer( params->vaobj, params->bindingindex, params->buffer, (GLintptr)ULongToPtr(params->offset), params->stride );
+    funcs->p_glVertexArrayVertexBuffer( params->vaobj, params->bindingindex, params->buffer, (GLintptr)madeira_se_wow64_widen_integer(params->offset), params->stride );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }
@@ -80687,7 +80688,7 @@ static NTSTATUS wow64_ext_glVertexArrayVertexOffsetEXT( void *args )
     TEB *teb = get_teb64( params->teb );
     const struct opengl_funcs *funcs = teb->glTable;
     if (!funcs->p_glVertexArrayVertexOffsetEXT) return STATUS_NOT_IMPLEMENTED;
-    funcs->p_glVertexArrayVertexOffsetEXT( params->vaobj, params->buffer, params->size, params->type, params->stride, (GLintptr)ULongToPtr(params->offset) );
+    funcs->p_glVertexArrayVertexOffsetEXT( params->vaobj, params->buffer, params->size, params->type, params->stride, (GLintptr)madeira_se_wow64_widen_integer(params->offset) );
     set_context_attribute( teb, -1 /* unsupported */, NULL, 0 );
     return STATUS_SUCCESS;
 }

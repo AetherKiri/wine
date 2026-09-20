@@ -27,6 +27,11 @@
 #include "ntgdi_private.h"
 #include "ntuser_private.h"
 #include "wine/server.h"
+#include <stdlib.h>
+#include <string.h>
+#if defined(__APPLE__) && defined(__aarch64__)
+#include "wine/madeira_se.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(win);
 
@@ -290,6 +295,16 @@ static BOOL set_window_text( HWND hwnd, const void *text, BOOL ansi )
     static const WCHAR emptyW[] = { 0 };
     WCHAR *str;
     WND *win;
+
+#if defined(__APPLE__) && defined(__aarch64__)
+    /* A raw WM_SETTEXT lParam arrives through the 32-bit guest callback.
+     * Translate guest-arena pointers before the native host dereferences it. */
+    if (text && getenv( "MADEIRA_SE_GUEST_ARCH" ) &&
+        !strcmp( getenv( "MADEIRA_SE_GUEST_ARCH" ), "i386" ) &&
+        (uintptr_t)text >= MADEIRA_SE_WOW64_LOWEST_USER_ADDRESS &&
+        (uintptr_t)text < ((uintptr_t)1 << 32))
+        text = madeira_se_wow64_guest_to_host( (uint32_t)(uintptr_t)text );
+#endif
 
     /* check for string, as static icons, bitmaps (SS_ICON, SS_BITMAP)
      * may have child window IDs instead of window name */

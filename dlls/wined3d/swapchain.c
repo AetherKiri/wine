@@ -216,6 +216,8 @@ HRESULT CDECL wined3d_swapchain_present(struct wined3d_swapchain *swapchain,
         unsigned int swap_interval, uint32_t flags)
 {
     const struct wined3d_swapchain_desc *desc = &swapchain->state.desc;
+    static RECT last_src, last_dst, last_client;
+    static unsigned int last_width, last_height;
     RECT s, d;
 
     TRACE("swapchain %p, src_rect %s, dst_rect %s, dst_window_override %p, swap_interval %u, flags %#x.\n",
@@ -247,6 +249,27 @@ HRESULT CDECL wined3d_swapchain_present(struct wined3d_swapchain *swapchain,
         else
             GetClientRect(swapchain->win_handle, &d);
         dst_rect = &d;
+    }
+
+    if (getenv("MADEIRA_SE_D3D9_DIAGNOSTICS"))
+    {
+        RECT client_rect;
+
+        GetClientRect(swapchain->win_handle, &client_rect);
+        if (last_width != desc->backbuffer_width || last_height != desc->backbuffer_height
+                || !EqualRect(&last_src, src_rect) || !EqualRect(&last_dst, dst_rect)
+                || !EqualRect(&last_client, &client_rect))
+        {
+            ERR("[madeira-d3d9] Present backbuffer=%ux%u windowed=%#x client=%s src=%s dst=%s.\n",
+                    desc->backbuffer_width, desc->backbuffer_height, desc->windowed,
+                    wine_dbgstr_rect(&client_rect), wine_dbgstr_rect(src_rect),
+                    wine_dbgstr_rect(dst_rect));
+            last_width = desc->backbuffer_width;
+            last_height = desc->backbuffer_height;
+            last_src = *src_rect;
+            last_dst = *dst_rect;
+            last_client = client_rect;
+        }
     }
 
     wined3d_cs_emit_present(swapchain->device->cs, swapchain, src_rect,

@@ -36,6 +36,9 @@ SOURCES = \
 	input.c \
 	main.c \
 	mapping.c \
+	madeira_wow64_gdi.c \
+	madeira_wow64_syscall.c \
+	madeira_wow64_user.c \
 	menu.c \
 	message.c \
 	opengl.c \
