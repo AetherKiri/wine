@@ -67,6 +67,30 @@ static uint64_t madeira_cpu_run_budget(void)
     return budget;
 }
 
+/* A resident QEMU CPU context is an optimization only when Wine can prove
+ * that nothing touched the saved guest context between slices.  That proof
+ * is not available on the WoW64 callback path, so keep reuse disabled by
+ * default.  A bounded opt-in is useful for profiling and can be enabled once
+ * a title has passed the long-running correctness test. */
+static unsigned int madeira_cpu_reuse_slices(void)
+{
+    static int initialized;
+    static unsigned int slices;
+    const char *value;
+    char *end;
+    unsigned long parsed;
+
+    if (initialized) return slices;
+    initialized = 1;
+    if (getenv( "MADEIRA_DISABLE_CPU_REUSE" )) return 0;
+    value = getenv( "MADEIRA_SE_CPU_REUSE_SLICES" );
+    if (!value || !*value) return 0;
+    errno = 0;
+    parsed = strtoul( value, &end, 10 );
+    if (!errno && end != value && !*end && parsed <= 64) slices = (unsigned int)parsed;
+    return slices;
+}
+
 typedef int32_t (*host_dispatch_fn)(uint32_t, void *, uint32_t);
 typedef int32_t (*runtime_start_fn)(const char *);
 
@@ -121,10 +145,34 @@ struct madeira_thread
     BOOL amd64_context_valid;
     BOOL amd64_stack_active;
     BOOL cpu_context_reusable;
+    unsigned int cpu_context_reuse_remaining;
     struct madeira_x64_callback_state *callback;
     struct madeira_x64_callback_state *retained_callback;
     struct madeira_thread *next;
 };
+
+static void madeira_cpu_disable_context_reuse( struct madeira_thread *thread )
+{
+    if (!thread) return;
+    thread->cpu_context_reusable = FALSE;
+    thread->cpu_context_reuse_remaining = 0;
+}
+
+static void madeira_cpu_record_budget( struct madeira_thread *thread, BOOL reused )
+{
+    unsigned int slices = madeira_cpu_reuse_slices();
+
+    if (!thread || !slices)
+    {
+        madeira_cpu_disable_context_reuse( thread );
+        return;
+    }
+    if (reused && thread->cpu_context_reuse_remaining)
+        thread->cpu_context_reuse_remaining--;
+    else
+        thread->cpu_context_reuse_remaining = slices;
+    thread->cpu_context_reusable = thread->cpu_context_reuse_remaining != 0;
+}
 
 struct guest_unix_call
 {
@@ -1470,13 +1518,13 @@ static void WINAPI madeira_cpu_simulate(void)
     if (!thread_handle || !context) terminate_on_error( STATUS_DEVICE_NOT_READY );
     if (context->Eip == guest_address( syscall_dispatcher ))
     {
-        if (thread) thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         service_dispatcher( context, FALSE );
         return;
     }
     if (context->Eip == guest_address( unix_call_dispatcher ))
     {
-        if (thread) thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         service_dispatcher( context, TRUE );
         return;
     }
@@ -1486,7 +1534,8 @@ static void WINAPI madeira_cpu_simulate(void)
     message.request.max_instructions = madeira_cpu_run_budget();
     message.request.syscall_dispatcher = guest_address( syscall_dispatcher );
     message.request.unix_call_dispatcher = guest_address( unix_call_dispatcher );
-    if (thread && thread->cpu_context_reusable)
+    if (thread && thread->cpu_context_reusable &&
+        thread->cpu_context_reuse_remaining && madeira_cpu_reuse_slices())
         message.request.flags |= MADEIRA_SE_CPU_RUN_REUSE_CONTEXT;
     context_to_canonical( context, &message.context );
     TRACE( "run thread %llu eip %#lx esp %#lx eax %#lx ebx %#lx ecx %#lx edx %#lx "
@@ -1518,18 +1567,18 @@ static void WINAPI madeira_cpu_simulate(void)
     if (message.result.reason == MADEIRA_SE_CPU_EXIT_SYSCALL ||
         context->Eip == guest_address( syscall_dispatcher ))
     {
-        if (thread) thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         service_dispatcher( context, FALSE );
     }
     else if (message.result.reason == MADEIRA_SE_CPU_EXIT_UNIX_CALL ||
              context->Eip == guest_address( unix_call_dispatcher ))
     {
-        if (thread) thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         service_dispatcher( context, TRUE );
     }
     else if (message.result.reason == MADEIRA_SE_CPU_EXIT_EXCEPTION)
     {
-        if (thread) thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         EXCEPTION_RECORD record = { 0 };
 
         if (message.result.exception_vector == 14 &&
@@ -1551,11 +1600,17 @@ static void WINAPI madeira_cpu_simulate(void)
     }
     else if (message.result.reason == MADEIRA_SE_CPU_EXIT_HALT)
     {
-        if (thread) thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         terminate_on_error( STATUS_ILLEGAL_INSTRUCTION );
     }
     else if (thread)
-        thread->cpu_context_reusable = message.result.reason == MADEIRA_SE_CPU_EXIT_BUDGET;
+    {
+        if (message.result.reason == MADEIRA_SE_CPU_EXIT_BUDGET)
+            madeira_cpu_record_budget( thread,
+                                       (message.request.flags & MADEIRA_SE_CPU_RUN_REUSE_CONTEXT) != 0 );
+        else
+            madeira_cpu_disable_context_reuse( thread );
+    }
 }
 
 static void madeira_cpu_simulate_amd64( struct madeira_thread *thread )
@@ -1566,13 +1621,13 @@ static void madeira_cpu_simulate_amd64( struct madeira_thread *thread )
 
     if (context->Rip == guest_address( syscall_dispatcher ))
     {
-        thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         service_dispatcher_amd64( context, FALSE );
         return;
     }
     if (context->Rip == guest_address( unix_call_dispatcher ))
     {
-        thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         service_dispatcher_amd64( context, TRUE );
         return;
     }
@@ -1582,7 +1637,8 @@ static void madeira_cpu_simulate_amd64( struct madeira_thread *thread )
     message.request.max_instructions = madeira_cpu_run_budget();
     message.request.syscall_dispatcher = guest_address( syscall_dispatcher );
     message.request.unix_call_dispatcher = guest_address( unix_call_dispatcher );
-    if (thread->cpu_context_reusable)
+    if (thread->cpu_context_reusable && thread->cpu_context_reuse_remaining &&
+        madeira_cpu_reuse_slices())
         message.request.flags |= MADEIRA_SE_CPU_RUN_REUSE_CONTEXT;
     amd64_context_to_canonical( context, &message.context );
     message.result.version = MADEIRA_SE_CPU_ABI_VERSION;
@@ -1597,18 +1653,18 @@ static void madeira_cpu_simulate_amd64( struct madeira_thread *thread )
     if (message.result.reason == MADEIRA_SE_CPU_EXIT_SYSCALL ||
         context->Rip == guest_address( syscall_dispatcher ))
     {
-        thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         service_dispatcher_amd64( context, FALSE );
     }
     else if (message.result.reason == MADEIRA_SE_CPU_EXIT_UNIX_CALL ||
              context->Rip == guest_address( unix_call_dispatcher ))
     {
-        thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         service_dispatcher_amd64( context, TRUE );
     }
     else if (message.result.reason == MADEIRA_SE_CPU_EXIT_EXCEPTION)
     {
-        thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         const unsigned char *code = guest_pointer( context->Rip );
         const ULONG64 *stack = guest_pointer( context->Rsp );
 
@@ -1643,11 +1699,14 @@ static void madeira_cpu_simulate_amd64( struct madeira_thread *thread )
     }
     else if (message.result.reason == MADEIRA_SE_CPU_EXIT_HALT)
     {
-        thread->cpu_context_reusable = FALSE;
+        madeira_cpu_disable_context_reuse( thread );
         terminate_on_error( STATUS_ILLEGAL_INSTRUCTION );
     }
+    else if (message.result.reason == MADEIRA_SE_CPU_EXIT_BUDGET)
+        madeira_cpu_record_budget( thread,
+                                   (message.request.flags & MADEIRA_SE_CPU_RUN_REUSE_CONTEXT) != 0 );
     else
-        thread->cpu_context_reusable = message.result.reason == MADEIRA_SE_CPU_EXIT_BUDGET;
+        madeira_cpu_disable_context_reuse( thread );
 }
 
 void WINAPI madeira_se_x64_ldr_initialize( CONTEXT *native_context )
