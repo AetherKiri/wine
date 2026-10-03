@@ -916,6 +916,58 @@ static void macdrv_send_keyboard_input(HWND hwnd, WORD vkey, WORD scan, unsigned
     NtUserSendHardwareInput(hwnd, 0, &input, 0);
 }
 
+/* Madeira-SE standalone launches can provide a fixed client size before a
+ * visual novel creates Direct3D.  A number of older engines nevertheless
+ * open a native two-button "fullscreen/window" modal and wait in
+ * GetMessage.  Answer that dialog through Wine's normal input queue so the
+ * runtime stays usable without Accessibility/CGEvent injection from the
+ * host application. */
+void macdrv_auto_select_window_mode(void)
+{
+    static LONG selected;
+    /* WCHAR is UTF-16 even on macOS, whose native wchar_t is 32 bits.
+     * This is "画面モードを選択してください". */
+    static const WCHAR mode_title[] = {
+        0x753b, 0x9762, 0x30e2, 0x30fc, 0x30c9, 0x3092, 0x9078,
+        0x629e, 0x3057, 0x3066, 0x304f, 0x3060, 0x3055, 0x3044, 0
+    };
+    static const WORD keys[] = { VK_RIGHT, VK_RETURN };
+    const char *mode = getenv("MADEIRA_SE_AUTO_WINDOW_MODE");
+    HWND windows[64], hwnd = NULL;
+    ULONG size = ARRAY_SIZE(windows), i;
+
+    if (!mode || strcmp(mode, "windowed") || InterlockedCompareExchange(&selected, 0, 0))
+        return;
+
+    /* Restrict the search to this thread's top-level windows.  Once the
+     * display-mode dialog is answered, do no more window-server queries. */
+    if (NtUserBuildHwndList(0, 0, FALSE, TRUE, GetCurrentThreadId(),
+                           ARRAY_SIZE(windows), windows, &size)) return;
+    for (i = 0; i + 1 < size && i < ARRAY_SIZE(windows); ++i)
+    {
+        WCHAR title[128];
+        INT length = NtUserInternalGetWindowText(windows[i], title, ARRAY_SIZE(title));
+        if (length != ARRAY_SIZE(mode_title) - 1 || memcmp(title, mode_title, sizeof(mode_title))) continue;
+        if (!(NtUserGetWindowLongW(windows[i], GWL_STYLE) & WS_VISIBLE)) continue;
+        hwnd = windows[i];
+        break;
+    }
+    if (!hwnd || InterlockedCompareExchange(&selected, 1, 0)) return;
+
+    for (i = 0; i < ARRAY_SIZE(keys); ++i)
+    {
+        INPUT input = {0};
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = keys[i];
+        input.ki.wScan = 0;
+        input.ki.dwFlags = 0;
+        NtUserSendHardwareInput(hwnd, 0, &input, 0);
+        input.ki.dwFlags = KEYEVENTF_KEYUP;
+        NtUserSendHardwareInput(hwnd, 0, &input, 0);
+    }
+    fprintf(stderr, "Madeira-SE: selected Window in display-mode dialog (hwnd=%p)\n", hwnd);
+}
+
 
 /***********************************************************************
  *           update_modifier_state
