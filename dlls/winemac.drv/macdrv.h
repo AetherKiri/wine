@@ -169,6 +169,7 @@ extern BOOL macdrv_SetIMECompositionRect(HWND hwnd, RECT rect);
 extern BOOL macdrv_SystemParametersInfo(UINT action, UINT int_param, void *ptr_param,
                                         UINT flags);
 extern BOOL macdrv_ProcessEvents(DWORD mask);
+extern void macdrv_auto_select_window_mode(void);
 extern void macdrv_ThreadDetach(void);
 
 

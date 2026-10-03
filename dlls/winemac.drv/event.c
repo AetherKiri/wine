@@ -507,6 +507,8 @@ BOOL macdrv_ProcessEvents(DWORD mask)
 
     if (!data) return FALSE;
 
+    macdrv_auto_select_window_mode();
+
     if (data->current_event && data->current_event->type != QUERY_EVENT &&
         data->current_event->type != QUERY_EVENT_NO_PREEMPT_WAIT &&
         data->current_event->type != APP_QUIT_REQUESTED &&
