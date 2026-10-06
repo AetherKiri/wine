@@ -1228,9 +1228,19 @@ NTSTATUS init_thread_stack( TEB *teb, ULONG_PTR limit, SIZE_T reserve_size, SIZE
         teb->DeallocationStack = stack.DeallocationStack;
 
         /* 32-bit stack */
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+        if (limit && limit < MADEIRA_SE_WOW64_GUEST_BIAS)
+            limit += MADEIRA_SE_WOW64_GUEST_BIAS;
+        if (!limit || limit > user_space_wow_limit) limit = user_space_wow_limit;
+        if ((status = virtual_alloc_thread_stack( &stack,
+                                                  MADEIRA_SE_WOW64_GUEST_BIAS + 0x10000,
+                                                  limit, reserve_size, commit_size, TRUE )))
+            return status;
+#else
         if (!limit || limit > user_space_wow_limit) limit = user_space_wow_limit;
         if ((status = virtual_alloc_thread_stack( &stack, 0, limit, reserve_size, commit_size, TRUE )))
             return status;
+#endif
         wow_teb->Tib.StackBase = PtrToUlong( stack.StackBase );
         wow_teb->Tib.StackLimit = PtrToUlong( stack.StackLimit );
         wow_teb->DeallocationStack = PtrToUlong( stack.DeallocationStack );

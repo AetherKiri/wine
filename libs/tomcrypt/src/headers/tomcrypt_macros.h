@@ -251,7 +251,9 @@ do { x = (((ulong64)((y)[7] & 255))<<56)|(((ulong64)((y)[6] & 255))<<48) | \
 #define RORc(x,n) _lrotr(x,n)
 #define ROLc(x,n) _lrotl(x,n)
 
-#elif !defined(__STRICT_ANSI__) && defined(__GNUC__) && (defined(__i386__) || defined(__x86_64__)) && !defined(INTEL_CC) && !defined(LTC_NO_ASM)
+#elif !defined(__STRICT_ANSI__) && defined(__GNUC__) && \
+      (defined(__i386__) || (defined(__x86_64__) && !defined(__arm64ec__))) && \
+      !defined(INTEL_CC) && !defined(LTC_NO_ASM)
 #define LTC_ROx_ASM
 
 static inline ulong32 ROL(ulong32 word, int i)

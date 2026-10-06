@@ -28,6 +28,7 @@
 
 #include <Security/AuthSession.h>
 #include <IOKit/pwr_mgt/IOPMLib.h>
+#include <stdlib.h>
 
 #include "ntstatus.h"
 #include "macdrv.h"
@@ -386,7 +387,7 @@ static void setup_options(void)
 /***********************************************************************
  *              load_strings
  */
-static void load_strings(struct localized_string *str)
+static void load_strings(struct localized_string *str, BOOL wow64)
 {
     CFMutableDictionaryRef dict;
 
@@ -402,7 +403,7 @@ static void load_strings(struct localized_string *str)
     {
         if (str->str && str->len)
         {
-            const UniChar *ptr = param_ptr(str->str);
+            const UniChar *ptr = wow64 ? UlongToPtr( (ULONG)str->str ) : param_ptr(str->str);
             CFNumberRef key = CFNumberCreate(NULL, kCFNumberIntType, &str->id);
             CFStringRef value = CFStringCreateWithCharacters(NULL, ptr, str->len);
             if (key && value)
@@ -422,7 +423,7 @@ static void load_strings(struct localized_string *str)
 /***********************************************************************
  *              macdrv_init
  */
-static NTSTATUS macdrv_init(void *arg)
+static NTSTATUS macdrv_init_common(void *arg, BOOL wow64)
 {
     struct init_params *params = arg;
     SessionAttributeBits attributes;
@@ -437,10 +438,17 @@ static NTSTATUS macdrv_init(void *arg)
 
     init_win_context();
     setup_options();
-    load_strings(params->strings);
+    load_strings(params->strings, wow64);
 
     macdrv_err_on = ERR_ON(macdrv);
-    if (macdrv_start_cocoa_app(NtGetTickCount()))
+    /* Prefix bootstrap is a helper process, not the user's Windows
+     * application.  Starting NSApplication for it leaves the ARM64 host in
+     * Cocoa's permanent event loop while wineboot is waiting for setupapi.
+     * Keep the normal Cocoa driver for the target process, but let the
+     * one-shot headless bootstrap initialize its registry without a desktop
+     * application. */
+    if (!(getenv( "MADEIRA_SE_NO_DESKTOP" ) && getenv( "WINEBOOTSTRAPMODE" )) &&
+        macdrv_start_cocoa_app(NtGetTickCount()))
     {
         ERR("Failed to start Cocoa app main loop\n");
         return STATUS_UNSUCCESSFUL;
@@ -448,6 +456,11 @@ static NTSTATUS macdrv_init(void *arg)
 
     init_user_driver();
     return STATUS_SUCCESS;
+}
+
+static NTSTATUS macdrv_init(void *arg)
+{
+    return macdrv_init_common(arg, FALSE);
 }
 
 
@@ -625,7 +638,7 @@ static NTSTATUS wow64_init(void *arg)
     params.strings = UlongToPtr(params32->strings);
     params.app_icon_callback = params32->app_icon_callback;
     params.app_quit_request_callback = params32->app_quit_request_callback;
-    return macdrv_init(&params);
+    return macdrv_init_common(&params, TRUE);
 }
 
 const unixlib_entry_t __wine_unix_call_wow64_funcs[] =

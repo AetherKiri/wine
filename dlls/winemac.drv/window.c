@@ -46,6 +46,12 @@ static CFMutableDictionaryRef win_datas;
 static unsigned int activate_on_focus_time;
 
 
+static BOOL madeira_d3d9_diagnostics_enabled(void)
+{
+    return getenv("MADEIRA_SE_D3D9_DIAGNOSTICS") != NULL;
+}
+
+
 /* per-monitor DPI aware NtUserSetWindowPos call */
 static BOOL set_window_pos(HWND hwnd, HWND after, INT x, INT y, INT cx, INT cy, UINT flags)
 {
@@ -1107,11 +1113,17 @@ static void macdrv_client_surface_update(struct client_surface *client)
     HWND hwnd = client->hwnd, toplevel = NtUserGetAncestor(hwnd, GA_ROOT);
     struct macdrv_win_data *data;
     RECT rect;
+    UINT raw_dpi = NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI);
+    UINT window_dpi = NtUserGetDpiForWindow(hwnd);
 
     TRACE("%s\n", debugstr_client_surface(client));
 
-    NtUserGetClientRect(hwnd, &rect, NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI));
+    NtUserGetClientRect(hwnd, &rect, raw_dpi);
     NtUserMapWindowPoints(hwnd, toplevel, (POINT *)&rect, 2, NtUserGetWinMonitorDpi(toplevel, MDT_RAW_DPI));
+
+    if (madeira_d3d9_diagnostics_enabled())
+        ERR("[madeira-macdrv] update surface hwnd=%p top=%p raw_dpi=%u window_dpi=%u rect=%s.\n",
+                hwnd, toplevel, raw_dpi, window_dpi, wine_dbgstr_rect(&rect));
 
     if (!(data = get_win_data(toplevel))) return;
     OffsetRect(&rect, data->rects.client.left - data->rects.visible.left, data->rects.client.top - data->rects.visible.top);
@@ -1150,9 +1162,15 @@ struct macdrv_client_surface *macdrv_client_surface_create(HWND hwnd)
     HWND toplevel = NtUserGetAncestor(hwnd, GA_ROOT);
     struct macdrv_client_surface *surface;
     RECT rect;
+    UINT raw_dpi = NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI);
+    UINT window_dpi = NtUserGetDpiForWindow(hwnd);
 
-    NtUserGetClientRect(hwnd, &rect, NtUserGetWinMonitorDpi(hwnd, MDT_RAW_DPI));
+    NtUserGetClientRect(hwnd, &rect, raw_dpi);
     NtUserMapWindowPoints(hwnd, toplevel, (POINT *)&rect, 2, NtUserGetWinMonitorDpi(toplevel, MDT_RAW_DPI));
+
+    if (madeira_d3d9_diagnostics_enabled())
+        ERR("[madeira-macdrv] create surface hwnd=%p top=%p raw_dpi=%u window_dpi=%u rect=%s.\n",
+                hwnd, toplevel, raw_dpi, window_dpi, wine_dbgstr_rect(&rect));
 
     surface = client_surface_create(sizeof(*surface), &macdrv_client_surface_funcs, hwnd);
     surface->cocoa_view = macdrv_create_view(cgrect_from_rect(rect));
@@ -1264,11 +1282,44 @@ void macdrv_DestroyWindow(HWND hwnd)
 void macdrv_ActivateWindow(HWND hwnd, HWND previous)
 {
     struct macdrv_thread_data *thread_data = macdrv_thread_data();
+    HWND root = hwnd;
+    struct macdrv_win_data *data;
 
     TRACE("%p\n", hwnd);
 
     if (!thread_data) return;
     thread_data->dead_key_state = 0;
+
+    /* A normal Wine desktop makes applications show their first top-level
+     * window through the desktop/window-manager path.  Madeira-SE deliberately
+     * omits explorer.exe, and a number of older visual novels create the main
+     * window without WS_VISIBLE and rely on SetForegroundWindow to make it
+     * presentable.  In that profile activation is the reliable point at which
+     * to order the Cocoa window onto the screen. */
+    if (getenv( "MADEIRA_SE_NO_DESKTOP" ) && !getenv( "WINEBOOTSTRAPMODE" ) &&
+        (root = NtUserGetAncestor( hwnd, GA_ROOT )) && root != NtUserGetDesktopWindow() &&
+        (data = get_win_data( root )))
+    {
+        if (data->cocoa_window && !data->on_screen &&
+            !(NtUserGetWindowLongW( root, GWL_STYLE ) & WS_MINIMIZE))
+        {
+            TRACE("ordering standalone activated window %p/%p\n", root, data->cocoa_window);
+            show_window( data );
+
+            /* The Win32 window was created hidden, so get_window_surface()
+             * supplied the dummy surface before activation.  Ask win32u to
+             * run the SHOWWINDOW surface path now that the Cocoa window is
+             * ordered, then repaint the whole tree into the real surface. */
+            NtUserSetWindowPos( root, HWND_TOP, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |
+                                SWP_NOOWNERZORDER | SWP_SHOWWINDOW );
+            NtUserRedrawWindow( root, NULL, 0,
+                                RDW_INVALIDATE | RDW_ERASE | RDW_FRAME |
+                                RDW_UPDATENOW | RDW_ALLCHILDREN );
+        }
+        release_win_data( data );
+    }
+
     set_focus(hwnd, TRUE);
 }
 

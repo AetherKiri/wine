@@ -26,6 +26,7 @@
 #include "ntstatus.h"
 #include "winternl.h"
 #include "wine/debug.h"
+#include "wine/madeira_se.h"
 #include "ntdll_misc.h"
 #include "ddk/wdm.h"
 #include "wine/exception.h"
@@ -35,7 +36,8 @@ WINE_DECLARE_DEBUG_CHANNEL(relay);
 WINE_DECLARE_DEBUG_CHANNEL(pid);
 WINE_DECLARE_DEBUG_CHANNEL(timestamp);
 
-struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+struct _KUSER_SHARED_DATA *user_shared_data =
+    (void *)(ULONG_PTR)MADEIRA_SE_USER_SHARED_DATA_ADDRESS;
 
 struct debug_info
 {

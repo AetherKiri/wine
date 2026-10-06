@@ -24,6 +24,17 @@
 #include "../ntdll/ntsyscalls.h"
 #include "struct32.h"
 
+#ifdef MADEIRA_SE_WOW64_HOST
+#include "wine/madeira_se.h"
+#include "wine/unixlib.h"
+
+/* The native host sees PE32 memory through Madeira-SE's 4 GiB-biased arena. */
+#undef ULongToPtr
+#undef PtrToUlong
+#define ULongToPtr(value) madeira_se_wow64_guest_to_host( (ULONG)(value) )
+#define PtrToUlong(value) madeira_se_wow64_host_to_guest( (const void *)(value) )
+#endif
+
 #define SYSCALL_ENTRY(id,name,_args) extern NTSTATUS WINAPI wow64_ ## name( UINT *args );
 ALL_SYSCALLS32
 #undef SYSCALL_ENTRY

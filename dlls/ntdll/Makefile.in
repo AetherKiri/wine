@@ -54,6 +54,16 @@ SOURCES = \
 	unix/file.c \
 	unix/loader.c \
 	unix/loadorder.c \
+	unix/madeira_cpu.c \
+	unix/madeira_wow64_file.c \
+	unix/madeira_wow64_process.c \
+	unix/madeira_wow64_registry.c \
+	unix/madeira_wow64_security.c \
+	unix/madeira_wow64_shims.c \
+	unix/madeira_wow64_sync.c \
+	unix/madeira_wow64_syscall.c \
+	unix/madeira_wow64_system.c \
+	unix/madeira_wow64_virtual.c \
 	unix/process.c \
 	unix/registry.c \
 	unix/security.c \
@@ -81,3 +91,13 @@ unix_loader_EXTRADEFS = \
 	-DLIBDIR=\"${libdir}\" \
 	-DDATADIR=\"${datadir}\" \
 	-DSYSTEMDLLPATH=\"${system_dllpath}\"
+
+unix_madeira_wow64_file_EXTRADEFS = -fshort-wchar
+unix_madeira_wow64_process_EXTRADEFS = -fshort-wchar
+unix_madeira_wow64_registry_EXTRADEFS = -fshort-wchar
+unix_madeira_wow64_security_EXTRADEFS = -fshort-wchar
+unix_madeira_wow64_shims_EXTRADEFS = -fshort-wchar
+unix_madeira_wow64_sync_EXTRADEFS = -fshort-wchar
+unix_madeira_wow64_syscall_EXTRADEFS = -fshort-wchar
+unix_madeira_wow64_system_EXTRADEFS = -fshort-wchar
+unix_madeira_wow64_virtual_EXTRADEFS = -fshort-wchar

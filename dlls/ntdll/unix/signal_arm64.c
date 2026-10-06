@@ -57,6 +57,7 @@
 #include "winternl.h"
 #include "wine/asm.h"
 #include "unix_private.h"
+#include "madeira_wow64.h"
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(seh);
@@ -703,6 +704,18 @@ static void setup_raise_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec
     void *stack_ptr = (void *)(SP_sig(sigcontext) & ~15);
     NTSTATUS status;
 
+#ifdef __APPLE__
+    /*
+     * Darwin places the signal frame below the interrupted stack pointer.
+     * Allocating the exception frame from SP_sig() therefore overwrites the
+     * ucontext_t that the signal trampoline supplied to us.  The next fault
+     * then sees a bogus uc_mcontext pointer and loops in the signal handler.
+     * Keep the frame below the handler's own frame instead; that area remains
+     * live until sigreturn has consumed the modified context.
+     */
+    stack_ptr = (void *)((ULONG_PTR)&stack & ~15);
+#endif
+
     status = send_debug_event( rec, context, TRUE, TRUE );
     if (status == DBG_CONTINUE || status == DBG_EXCEPTION_HANDLED)
     {
@@ -719,7 +732,16 @@ static void setup_raise_exception( ucontext_t *sigcontext, EXCEPTION_RECORD *rec
     context_init_empty_xstate( &stack->context, stack->redzone );
 
     SP_sig(sigcontext) = (ULONG_PTR)stack;
-    PC_sig(sigcontext) = (ULONG_PTR)pKiUserExceptionDispatcher;
+    if (!pKiUserExceptionDispatcher && madeira_se_wow64_runtime_active())
+    {
+        /* The native Mach-O ntdll has no PE KiUserExceptionDispatcher export.
+         * Pass the record to the Madeira WoW64 bridge with the normal ARM64
+         * calling convention, then resume the guest interpreter there. */
+        PC_sig(sigcontext) = (ULONG_PTR)madeira_se_native_exception_dispatcher;
+        REGn_sig(0, sigcontext) = (ULONG_PTR)&stack->rec;
+        REGn_sig(1, sigcontext) = (ULONG_PTR)&stack->context;
+    }
+    else PC_sig(sigcontext) = (ULONG_PTR)pKiUserExceptionDispatcher;
     REGn_sig(18, sigcontext) = (ULONG_PTR)NtCurrentTeb();
 }
 
@@ -964,9 +986,29 @@ __ASM_GLOBAL_FUNC( user_mode_abort_thread,
  */
 NTSTATUS KeUserModeCallback( ULONG id, const void *args, ULONG len, void **ret_ptr, ULONG *ret_len )
 {
-    struct syscall_frame *frame = get_syscall_frame();
-    ULONG64 sp = (frame->sp - offsetof( struct callback_stack_layout, args_data[len] ) - 16) & ~15;
-    struct callback_stack_layout *stack = (struct callback_stack_layout *)sp;
+    struct syscall_frame *frame;
+    ULONG64 sp;
+    struct callback_stack_layout *stack;
+
+#ifdef __APPLE__
+    extern BOOL madeira_se_wow64_callback_ready(void);
+    extern NTSTATUS madeira_se_wow64_user_callback( ULONG, const void *, ULONG, void **, ULONG * );
+    extern BOOL madeira_se_x64_callback_ready(void);
+    extern NTSTATUS madeira_se_x64_user_callback( ULONG, const void *, ULONG, void **, ULONG * );
+
+    /* Madeira-SE invokes the native win32u syscall thunks directly from the
+     * interpreter.  There is no separate ARM64 PE user stack, so constructing
+     * the regular ARM64 callback frame would overlap the active Mach-O stack.
+     * Its native wow64win bridge performs the same 64/32 conversion and enters
+     * the i386 callback synchronously through TCTI. */
+    if (madeira_se_wow64_callback_ready())
+        return madeira_se_wow64_user_callback( id, args, len, ret_ptr, ret_len );
+    if (madeira_se_x64_callback_ready())
+        return madeira_se_x64_user_callback( id, args, len, ret_ptr, ret_len );
+#endif
+    frame = get_syscall_frame();
+    sp = (frame->sp - offsetof( struct callback_stack_layout, args_data[len] ) - 16) & ~15;
+    stack = (struct callback_stack_layout *)sp;
 
     if ((char *)ntdll_get_thread_data()->kernel_stack + min_kernel_stack > (char *)&frame)
         return STATUS_STACK_OVERFLOW;

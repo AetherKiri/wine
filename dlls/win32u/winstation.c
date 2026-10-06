@@ -25,6 +25,7 @@
 #include <assert.h>
 #include <stdarg.h>
 #include <stddef.h>
+#include <stdlib.h>
 
 #include <pthread.h>
 
@@ -803,6 +804,13 @@ HWND get_desktop_window(void)
      * service processes) and skip the NtCreateUserProcess fallback below. */
     is_service = TRUE;
 #endif
+
+    /* Keep prefix helpers on a normal desktop while they initialize Wine,
+     * but do not start explorer for the actual standalone application.  The
+     * Cocoa provider still owns application windows; the server-created
+     * desktop is enough for Win32 message routing. */
+    if (getenv( "MADEIRA_SE_NO_DESKTOP" ) && !getenv( "WINEBOOTSTRAPMODE" ))
+        is_service = TRUE;
 
     SERVER_START_REQ( get_desktop_window )
     {

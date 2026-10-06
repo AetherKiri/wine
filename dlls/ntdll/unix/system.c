@@ -3267,6 +3267,12 @@ NTSTATUS WINAPI NtQuerySystemInformation( SYSTEM_INFORMATION_CLASS class,
     if ((unsigned int)class == 0xf00d && size == sizeof(void *))
     {
         extern void *ios_get_shared_futex_queues(void);
+        extern BOOL madeira_se_cpu_runtime_active(void);
+
+        /* A native address cannot be dereferenced by Madeira-SE's x86 TCTI
+         * guest.  STATUS_NOT_SUPPORTED makes PE ntdll use its own mapped
+         * futex table; all Madeira-SE PE waiters and wakers share that copy. */
+        if (madeira_se_cpu_runtime_active()) return STATUS_NOT_SUPPORTED;
         if (!info) return STATUS_ACCESS_VIOLATION;
         *(void **)info = ios_get_shared_futex_queues();
         if (ret_size) *ret_size = sizeof(void *);

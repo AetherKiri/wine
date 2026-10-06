@@ -57,6 +57,7 @@
 #include "winnls.h"
 #include "wine/condrv.h"
 #include "wine/debug.h"
+#include "wine/madeira_se.h"
 #include "unix_private.h"
 #include "locale_private.h"
 #include "error.h"
@@ -1027,13 +1028,20 @@ static void add_system_dll_path_var( WCHAR **env, SIZE_T *pos, SIZE_T *size )
  */
 static void add_dynamic_environment( WCHAR **env, SIZE_T *pos, SIZE_T *size )
 {
+    WCHAR *nt_guest_build_dir = NULL;
+    const char *guest_build_dir;
     unsigned int i;
     char str[22];
 
     if (build_dir) unix_to_nt_file_name( build_dir, &nt_build_dir, FILE_OPEN );
     if (data_dir) unix_to_nt_file_name( data_dir, &nt_data_dir, FILE_OPEN );
 
-    append_envW( env, pos, size, "WINEBUILDDIR", nt_build_dir );
+    guest_build_dir = getenv( "MADEIRA_SE_GUEST_BUILD_DIR" );
+    if (guest_build_dir && guest_build_dir[0])
+        unix_to_nt_file_name( guest_build_dir, &nt_guest_build_dir, FILE_OPEN );
+    append_envW( env, pos, size, "WINEBUILDDIR",
+                 nt_guest_build_dir ? nt_guest_build_dir : nt_build_dir );
+    free( nt_guest_build_dir );
     append_envW( env, pos, size, "WINEDATADIR", nt_data_dir );
     add_path_var( env, pos, size, "WINEHOMEDIR", home_dir );
     add_path_var( env, pos, size, "WINECONFIGDIR", config_dir );
@@ -1779,7 +1787,7 @@ static void *build_wow64_parameters( const RTL_USER_PROCESS_PARAMETERS *params )
                    + ((params->RuntimeInfo.MaximumLength + 1) & ~1)
                    + params->EnvironmentSize);
 
-    status = NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&wow64_params, limit_2g - 1, &size,
+    status = NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&wow64_params, 0, &size,
                                       MEM_COMMIT, PAGE_READWRITE );
     assert( !status );
 
@@ -1913,6 +1921,10 @@ static RTL_USER_PROCESS_PARAMETERS *build_initial_params( void **module )
 
     get_full_path( main_argv[1], curdir, &nt_name );
     status = load_main_exe( &nt_name, 0, module );
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+    TRACE( "Madeira-SE main image status %#x machine %#x module %p\n",
+           status, main_image_info.Machine, *module );
+#endif
     /* fail only if the file contained an explicit path */
     if (status == STATUS_DLL_NOT_FOUND &&
         (strpbrk( main_argv[1], "/\\" ) || (main_argv[1][0] && main_argv[1][1] == ':')))

@@ -36,6 +36,7 @@
 #include "dde.h"
 #include "immdev.h"
 #include "wine/debug.h"
+#include "wine/madeira_se.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(msg);
 WINE_DECLARE_DEBUG_CHANNEL(key);
@@ -45,7 +46,8 @@ WINE_DECLARE_DEBUG_CHANNEL(relay);
 #define QS_HARDWARE     0x40000000
 #define QS_INTERNAL     (QS_DRIVER | QS_HARDWARE)
 
-static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
+static const struct _KUSER_SHARED_DATA *user_shared_data =
+    (const struct _KUSER_SHARED_DATA *)(ULONG_PTR)MADEIRA_SE_USER_SHARED_DATA_ADDRESS;
 
 static LONG atomic_load_long( const volatile LONG *ptr )
 {

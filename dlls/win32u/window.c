@@ -24,6 +24,7 @@
 #endif
 
 #include <assert.h>
+#include <stdlib.h>
 
 #include "ntstatus.h"
 #include "ntgdi_private.h"
@@ -474,9 +475,10 @@ WND *get_win_ptr( HWND hwnd )
 {
     WND *win;
 
-    if ((win = get_user_handle_ptr( hwnd, NTUSER_OBJ_WINDOW )) == WND_OTHER_PROCESS)
+    if ((win = get_user_handle_ptr( hwnd, NTUSER_OBJ_WINDOW )) == WND_OTHER_PROCESS ||
+        (!win && is_desktop_window( hwnd )))
     {
-        if (is_desktop_window( hwnd )) win = WND_DESKTOP;
+        win = WND_DESKTOP;
     }
     return win;
 }
@@ -1750,6 +1752,115 @@ static void mirror_rect( const RECT *window_rect, RECT *rect )
     rect->right = width - tmp;
 }
 
+/* Madeira-SE launches a single Windows application without a Wine desktop.
+ * Apply its requested client size while the initial WINDOWPOS is still being
+ * calculated so the Win32 client rect, backing surface, and native window all
+ * agree.  The runner validates the value before exporting it; keep parsing
+ * defensive here because this is a shared Wine entry point. */
+static void maybe_apply_madeira_se_window_size( WINDOWPOS *winpos )
+{
+    static HWND main_hwnd;
+    static volatile LONG initialized;
+    static INT target_width, target_height;
+    const char *value;
+    char *end;
+    long width, height;
+    WND *win;
+    RECT target;
+    DWORD style, ex_style;
+    BOOL has_menu;
+    UINT dpi;
+
+    if (winpos->flags & SWP_NOSIZE) return;
+    if (!getenv( "MADEIRA_SE_NO_DESKTOP" ) || getenv( "WINEBOOTSTRAPMODE" ) ||
+        getenv( "MADEIRA_SE_NO_WINDOW_LOCK" )) return;
+    if (InterlockedCompareExchange( &initialized, 1, 0 ) == 0)
+    {
+        value = getenv( "MADEIRA_SE_WINDOW_SIZE" );
+        if (value)
+        {
+            width = strtol( value, &end, 10 );
+            if (*end == 'x' || *end == 'X')
+            {
+                height = strtol( end + 1, &end, 10 );
+                if (!*end && width >= 320 && width <= 7680 &&
+                    height >= 200 && height <= 4320)
+                {
+                    target_width = width;
+                    target_height = height;
+                }
+            }
+        }
+    }
+    if (!target_width || !target_height) return;
+
+    if (!(win = get_win_ptr( winpos->hwnd )))
+        return;
+
+    style = win->dwStyle;
+    ex_style = win->dwExStyle;
+    has_menu = !(style & WS_CHILD) && win->wIDmenu;
+    /* A borderless window at monitor size is the game's full-screen mode.  It
+     * must retain the monitor dimensions even after the main window has been
+     * identified, so the lock only affects windowed resizes. */
+    if ((style & WS_POPUP) && !(style & (WS_CAPTION | WS_THICKFRAME)) &&
+        winpos->cx >= 1024 && winpos->cy >= 600)
+    {
+        release_win_ptr( win );
+        return;
+    }
+
+    /* The first top-level window large enough to be an application surface is
+     * the standalone game's window.  Remember its handle: CatSystem2 calls
+     * SetWindowPos again after the mode dialog and otherwise restores its
+     * native 1280x720 size.  Tool windows, message windows, and tiny
+     * minimize/restore requests retain their native sizes. */
+    if (!main_hwnd)
+    {
+        if (win == WND_DESKTOP || win->parent != get_desktop_window() ||
+            (style & WS_CHILD) || (ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) ||
+            winpos->cx < 640 || winpos->cy < 400)
+        {
+            release_win_ptr( win );
+            return;
+        }
+        if (InterlockedCompareExchangePointer( (void **)&main_hwnd, winpos->hwnd, NULL ))
+        {
+            release_win_ptr( win );
+            return;
+        }
+    }
+    else if (main_hwnd != winpos->hwnd)
+    {
+        release_win_ptr( win );
+        return;
+    }
+
+    if (winpos->cx < 100 || winpos->cy < 100)
+    {
+        release_win_ptr( win );
+        return;
+    }
+
+    target.left = target.top = 0;
+    target.right = target_width;
+    target.bottom = target_height;
+    dpi = get_thread_dpi();
+    if (NtUserAdjustWindowRect( &target, style, has_menu, ex_style, dpi ))
+    {
+        winpos->cx = target.right - target.left;
+        winpos->cy = target.bottom - target.top;
+    }
+    else
+    {
+        winpos->cx = target_width;
+        winpos->cy = target_height;
+    }
+    TRACE( "Madeira-SE initial client size %dx%d -> window size %dx%d for %p\n",
+           target_width, target_height, winpos->cx, winpos->cy, winpos->hwnd );
+    release_win_ptr( win );
+}
+
 /***********************************************************************
  *           get_window_rects
  *
@@ -1765,7 +1876,16 @@ BOOL get_window_rects( HWND hwnd, enum coords_relative relative, struct window_r
         RtlSetLastWin32Error( ERROR_INVALID_WINDOW_HANDLE );
         return FALSE;
     }
-    if (win == WND_DESKTOP)
+    /* The standalone Madeira-SE profile deliberately has no explorer
+     * desktop.  Its server-created desktop handle can therefore still look
+     * like an ordinary cross-process window here even though it is the
+     * process desktop.  Give applications the same virtual monitor bounds
+     * that the desktop driver uses; otherwise GetWindowRect(GetDesktopWindow)
+     * returns an empty rectangle and centering code places the main window at
+     * negative coordinates. */
+    if (win == WND_DESKTOP ||
+        (getenv( "MADEIRA_SE_NO_DESKTOP" ) && !getenv( "WINEBOOTSTRAPMODE" ) &&
+         is_desktop_window( hwnd )))
     {
         RECT rect;
         rect.left = rect.top = 0;
@@ -1774,6 +1894,14 @@ BOOL get_window_rects( HWND hwnd, enum coords_relative relative, struct window_r
             rect.right  = 100;
             rect.bottom = 100;
             rect = map_dpi_rect( rect, get_dpi_for_window( hwnd ), dpi );
+        }
+        else if (getenv( "MADEIRA_SE_NO_DESKTOP" ) && !getenv( "WINEBOOTSTRAPMODE" ))
+        {
+            /* The native macOS driver already has the real union of displays.
+             * Use that value directly for the synthetic desktop handle; the
+             * primary-monitor registry entry is not guaranteed to exist in a
+             * no-explorer process. */
+            rect = get_virtual_screen_rect( dpi, MDT_DEFAULT );
         }
         else
         {
@@ -4038,6 +4166,8 @@ BOOL WINAPI NtUserSetWindowPos( HWND hwnd, HWND after, INT x, INT y, INT cx, INT
     winpos.flags = flags;
 
     map_dpi_winpos( &winpos );
+
+    maybe_apply_madeira_se_window_size( &winpos );
 
     if (is_current_thread_window( hwnd ))
         return set_window_pos( &winpos, 0, 0 );

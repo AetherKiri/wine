@@ -246,14 +246,22 @@ DLGPROC get_dialog_proc( DLGPROC ret, BOOL ansi )
 
 static void init_user(void)
 {
+    TRACE( "Madeira-SE init_user: system information\n" );
     NtQuerySystemInformation( SystemBasicInformation, &system_info, sizeof(system_info), NULL );
 
+    TRACE( "Madeira-SE init_user: startup information\n" );
     init_startup_info();
+    TRACE( "Madeira-SE init_user: shared session\n" );
     shared_session_init();
+    TRACE( "Madeira-SE init_user: GDI\n" );
     gdi_init();
+    TRACE( "Madeira-SE init_user: system parameters\n" );
     sysparams_init();
+    TRACE( "Madeira-SE init_user: window station\n" );
     winstation_init();
+    TRACE( "Madeira-SE init_user: desktop class\n" );
     register_desktop_class();
+    TRACE( "Madeira-SE init_user: complete\n" );
 }
 
 /***********************************************************************
@@ -267,6 +275,8 @@ NTSTATUS WINAPI NtUserInitializeClientPfnArrays( const ntuser_client_func_ptr *c
     static pthread_once_t init_once = PTHREAD_ONCE_INIT;
     UINT i;
 
+    TRACE( "Madeira-SE initializing client arrays A %p W %p workers %p module %p\n",
+           client_procsA, client_procsW, client_workers, user_module );
     for (i = 0; i < NTUSER_NB_PROCS; i++)
     {
         winproc_array[i].procA = client_procsA[i][0];
@@ -275,6 +285,7 @@ NTSTATUS WINAPI NtUserInitializeClientPfnArrays( const ntuser_client_func_ptr *c
     user32_module = user_module;
 
     pthread_once( &init_once, init_user );
+    TRACE( "Madeira-SE initialized client arrays\n" );
     return STATUS_SUCCESS;
 }
 

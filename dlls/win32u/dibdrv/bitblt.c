@@ -24,6 +24,8 @@
 
 #include <unistd.h>   /* iOS-Madeira ml508 */
 #include <assert.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "ntgdi_private.h"
 #include "dibdrv.h"
@@ -31,6 +33,18 @@
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(dib);
+
+/* Keep the bring-up blit trace out of the hot path unless it is explicitly
+ * requested.  WINEDEBUG does not affect this direct dprintf call. */
+static BOOL madeira_se_dib_trace_enabled(void)
+{
+    static int enabled = -1;
+
+    if (enabled == -1)
+        enabled = getenv("MADEIRA_SE_DIB_TRACE") &&
+                  strcmp(getenv("MADEIRA_SE_DIB_TRACE"), "0") != 0;
+    return enabled;
+}
 
 #define DST 0   /* Destination dib */
 #define SRC 1   /* Source dib */
@@ -1012,6 +1026,7 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,
      * one that already carries the displaced panel. Watching it names the
      * GUEST code that wrote each region. Only the big paint qualifies; the
      * watch itself is one-shot and env-gated (MADEIRA_SRCWATCH). */
+#if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__)
     if (dst && bits && bits->ptr && dst->visrect.right - dst->visrect.left >= 640
         && dst->visrect.bottom - dst->visrect.top >= 400)
     {
@@ -1036,7 +1051,11 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,
          * One variable, one comparison, no runs wasted on either answer. */
         {
             extern void winios_dump_srcbits( const void *bits, int w, int h, int stride )
+#ifdef __APPLE__
+                __attribute__((weak_import));
+#else
                 __attribute__((weak));
+#endif
             if (winios_dump_srcbits)
                 winios_dump_srcbits( bits->ptr,
                                      dst->visrect.right - dst->visrect.left,
@@ -1050,7 +1069,11 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,
          * buffer when the env var is unset. */
         extern void ios_srcwatch_arm_geom( const void *bits, unsigned long len,
                                            unsigned w, unsigned h, unsigned stride )
+#ifdef __APPLE__
+            __attribute__((weak_import));
+#else
             __attribute__((weak));
+#endif
         if (ios_srcwatch_arm_geom)
         {
             unsigned gw = dst->visrect.right - dst->visrect.left;
@@ -1062,16 +1085,24 @@ DWORD dibdrv_PutImage( PHYSDEV dev, HRGN clip, BITMAPINFO *info,
                                    gw, gh, gw * 4 );
         }
         else {
-        extern void ios_srcwatch_arm( const void *bits, unsigned long len );
-        ios_srcwatch_arm( bits->ptr,
-                          (unsigned long)info->bmiHeader.biSizeImage ?
-                              (unsigned long)info->bmiHeader.biSizeImage :
-                              (unsigned long)((dst->visrect.right - dst->visrect.left) * 4 *
-                                              (dst->visrect.bottom - dst->visrect.top)) );
+        extern void ios_srcwatch_arm( const void *bits, unsigned long len )
+#ifdef __APPLE__
+            __attribute__((weak_import));
+#else
+            __attribute__((weak));
+#endif
+        if (ios_srcwatch_arm)
+            ios_srcwatch_arm( bits->ptr,
+                              (unsigned long)info->bmiHeader.biSizeImage ?
+                                  (unsigned long)info->bmiHeader.biSizeImage :
+                                  (unsigned long)((dst->visrect.right - dst->visrect.left) * 4 *
+                                                  (dst->visrect.bottom - dst->visrect.top)) );
         }
     }
+#endif
 
-    if (dst && src && dst->visrect.right - dst->visrect.left >= 24)
+    if (madeira_se_dib_trace_enabled() && dst && src &&
+        dst->visrect.right - dst->visrect.left >= 24)
     {
         static unsigned n_put;
         unsigned n = ++n_put;

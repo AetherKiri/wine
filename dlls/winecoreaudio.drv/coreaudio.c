@@ -41,6 +41,7 @@
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <fenv.h>
+#include <pthread.h>
 #include <unistd.h>
 
 #include <CoreAudio/CoreAudio.h>
@@ -78,6 +79,13 @@ WINE_DEFAULT_DEBUG_CHANNEL(coreaudio);
 struct coreaudio_stream
 {
     os_unfair_lock lock;
+    /* CoreAudio may invoke an input/output callback concurrently with the
+     * thread that releases the stream.  Keep the object alive until every
+     * callback that already received its refCon has returned. */
+    pthread_mutex_t callback_mutex;
+    pthread_cond_t callback_cond;
+    unsigned int active_callbacks;
+    BOOL closing;
     AudioComponentInstance unit;
     AudioConverterRef converter;
     AudioStreamBasicDescription dev_desc; /* audio unit format, not necessarily the same as fmt */
@@ -127,6 +135,32 @@ static HRESULT osstatus_to_hresult(OSStatus sc)
 static struct coreaudio_stream *handle_get_stream(stream_handle h)
 {
     return (struct coreaudio_stream *)(UINT_PTR)h;
+}
+
+static BOOL ca_callback_enter(struct coreaudio_stream *stream)
+{
+    BOOL accepted;
+
+    pthread_mutex_lock(&stream->callback_mutex);
+    accepted = !stream->closing;
+    if (accepted) ++stream->active_callbacks;
+    pthread_mutex_unlock(&stream->callback_mutex);
+    return accepted;
+}
+
+static void ca_callback_leave(struct coreaudio_stream *stream)
+{
+    pthread_mutex_lock(&stream->callback_mutex);
+    if (--stream->active_callbacks == 0) pthread_cond_broadcast(&stream->callback_cond);
+    pthread_mutex_unlock(&stream->callback_mutex);
+}
+
+static void ca_wait_callbacks(struct coreaudio_stream *stream)
+{
+    pthread_mutex_lock(&stream->callback_mutex);
+    while (stream->active_callbacks) pthread_cond_wait(&stream->callback_cond,
+                                                       &stream->callback_mutex);
+    pthread_mutex_unlock(&stream->callback_mutex);
 }
 
 /* copied from kernelbase */
@@ -395,6 +429,13 @@ static OSStatus ca_render_cb(void *user, AudioUnitRenderActionFlags *flags,
     struct coreaudio_stream *stream = user;
     UINT32 to_copy_bytes, to_copy_frames, chunk_bytes, lcl_offs_bytes;
 
+    if (!ca_callback_enter(stream))
+    {
+        if (data && data->mNumberBuffers && data->mBuffers[0].mData)
+            memset(data->mBuffers[0].mData, 0, data->mBuffers[0].mDataByteSize);
+        return noErr;
+    }
+
     os_unfair_lock_lock(&stream->lock);
 
     if(stream->playing){
@@ -420,6 +461,7 @@ static OSStatus ca_render_cb(void *user, AudioUnitRenderActionFlags *flags,
         silence_buffer(stream, ((BYTE *)data->mBuffers[0].mData) + to_copy_bytes, nframes - to_copy_frames);
 
     os_unfair_lock_unlock(&stream->lock);
+    ca_callback_leave(stream);
 
     return noErr;
 }
@@ -452,6 +494,8 @@ static OSStatus ca_capture_cb(void *user, AudioUnitRenderActionFlags *flags,
     OSStatus sc;
     UINT32 cap_wri_offs_frames;
 
+    if (!ca_callback_enter(stream)) return noErr;
+
     os_unfair_lock_lock(&stream->lock);
 
     cap_wri_offs_frames = (stream->cap_offs_frames + stream->cap_held_frames) % stream->cap_bufsize_frames;
@@ -474,6 +518,7 @@ static OSStatus ca_capture_cb(void *user, AudioUnitRenderActionFlags *flags,
     sc = AudioUnitRender(stream->unit, flags, ts, bus, nframes, &list);
     if(sc != noErr){
         os_unfair_lock_unlock(&stream->lock);
+        ca_callback_leave(stream);
         return sc;
     }
 
@@ -494,6 +539,7 @@ static OSStatus ca_capture_cb(void *user, AudioUnitRenderActionFlags *flags,
     }
 
     os_unfair_lock_unlock(&stream->lock);
+    ca_callback_leave(stream);
     return noErr;
 }
 
@@ -725,6 +771,7 @@ static NTSTATUS unix_create_stream(void *args)
     AURenderCallbackStruct input;
     OSStatus sc;
     SIZE_T size;
+    BOOL callback_sync_initialized = FALSE;
 
     params->result = S_OK;
 
@@ -732,6 +779,17 @@ static NTSTATUS unix_create_stream(void *args)
         params->result = E_OUTOFMEMORY;
         return STATUS_SUCCESS;
     }
+
+    if (pthread_mutex_init(&stream->callback_mutex, NULL) != 0) {
+        params->result = E_FAIL;
+        goto end;
+    }
+    if (pthread_cond_init(&stream->callback_cond, NULL) != 0) {
+        pthread_mutex_destroy(&stream->callback_mutex);
+        params->result = E_FAIL;
+        goto end;
+    }
+    callback_sync_initialized = TRUE;
 
     stream->fmt = clone_format(params->fmt);
     if(!stream->fmt){
@@ -813,9 +871,30 @@ static NTSTATUS unix_create_stream(void *args)
 
 end:
     if(FAILED(params->result)){
+        if (callback_sync_initialized) {
+            AURenderCallbackStruct detached = {0};
+
+            pthread_mutex_lock(&stream->callback_mutex);
+            stream->closing = TRUE;
+            pthread_mutex_unlock(&stream->callback_mutex);
+            if (stream->unit) {
+                if (stream->flow == eCapture)
+                    AudioUnitSetProperty(stream->unit, kAudioOutputUnitProperty_SetInputCallback,
+                                         kAudioUnitScope_Output, 1, &detached, sizeof(detached));
+                else
+                    AudioUnitSetProperty(stream->unit, kAudioUnitProperty_SetRenderCallback,
+                                         kAudioUnitScope_Input, 0, &detached, sizeof(detached));
+                AudioOutputUnitStop(stream->unit);
+            }
+            ca_wait_callbacks(stream);
+        }
         if(stream->converter) AudioConverterDispose(stream->converter);
         if(stream->unit) AudioComponentInstanceDispose(stream->unit);
         free(stream->fmt);
+        if (callback_sync_initialized) {
+            pthread_cond_destroy(&stream->callback_cond);
+            pthread_mutex_destroy(&stream->callback_mutex);
+        }
         free(stream);
     } else {
         *params->channel_count = params->fmt->nChannels;
@@ -829,7 +908,12 @@ static NTSTATUS unix_release_stream( void *args )
 {
     struct release_stream_params *params = args;
     struct coreaudio_stream *stream = handle_get_stream(params->stream);
+    AURenderCallbackStruct detached = {0};
     SIZE_T size;
+
+    pthread_mutex_lock(&stream->callback_mutex);
+    stream->closing = TRUE;
+    pthread_mutex_unlock(&stream->callback_mutex);
 
     if(params->timer_thread){
         stream->please_quit = TRUE;
@@ -838,9 +922,16 @@ static NTSTATUS unix_release_stream( void *args )
     }
 
     if(stream->unit){
+        if (stream->flow == eCapture)
+            AudioUnitSetProperty(stream->unit, kAudioOutputUnitProperty_SetInputCallback,
+                                 kAudioUnitScope_Output, 1, &detached, sizeof(detached));
+        else
+            AudioUnitSetProperty(stream->unit, kAudioUnitProperty_SetRenderCallback,
+                                 kAudioUnitScope_Input, 0, &detached, sizeof(detached));
         AudioOutputUnitStop(stream->unit);
+        ca_wait_callbacks(stream);
         AudioComponentInstanceDispose(stream->unit);
-    }
+    } else ca_wait_callbacks(stream);
 
     if(stream->converter) AudioConverterDispose(stream->converter);
     free(stream->resamp_buffer);
@@ -857,6 +948,8 @@ static NTSTATUS unix_release_stream( void *args )
                             &size, MEM_RELEASE);
     }
     free(stream->fmt);
+    pthread_cond_destroy(&stream->callback_cond);
+    pthread_mutex_destroy(&stream->callback_mutex);
     free(stream);
     params->result = S_OK;
     return STATUS_SUCCESS;

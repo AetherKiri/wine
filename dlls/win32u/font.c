@@ -43,6 +43,9 @@
 #include "wine/unixlib.h"
 #include "wine/rbtree.h"
 #include "wine/debug.h"
+#if defined(__APPLE__) && defined(__aarch64__)
+#include "wine/madeira_se.h"
+#endif
 
 WINE_DEFAULT_DEBUG_CHANNEL(font);
 
@@ -2107,6 +2110,67 @@ static void load_system_links(void)
     }
 }
 
+#ifdef __APPLE__
+/*
+ * Windows SystemLink names (MSGOTHIC.TTC, MEIRYO.TTC, ...) are not present
+ * on a clean macOS installation.  CoreText still exposes complete CJK
+ * families, and load_mac_fonts() has already added those families to Wine's
+ * GDI font list.  Add the first available macOS CJK family to the Windows
+ * fallback chains so Japanese applications render without bundling or
+ * redistributing an Apple font.
+ */
+static void add_macos_cjk_fallbacks(void)
+{
+    static const char * const host_families[] =
+    {
+        "Hiragino Sans",
+        "Hiragino Sans GB",
+        "PingFang SC",
+        "BIZ UDGothic",
+        "Apple SD Gothic Neo",
+        "Arial Unicode MS"
+    };
+    static const WCHAR * const windows_families[] =
+    {
+        tahomaW,
+        microsoft_sans_serifW,
+        ms_ui_gothicW,
+        ms_gothicW,
+        ms_p_gothicW,
+        meiryoW,
+        meiryo_uiW,
+        ms_minchoW,
+        ms_p_minchoW
+    };
+    unsigned int i, j;
+
+    for (i = 0; i < ARRAY_SIZE(windows_families); ++i)
+    {
+        struct gdi_font_link *link = add_gdi_font_link( windows_families[i] );
+
+        if (!link) continue;
+        for (j = 0; j < ARRAY_SIZE(host_families); ++j)
+        {
+            struct gdi_font_family *family;
+            struct gdi_font_face *face;
+            WCHAR host_family[LF_FACESIZE];
+
+            asciiz_to_unicode( host_family, host_families[j] );
+            if (!(family = find_family_from_name( host_family ))) continue;
+            LIST_FOR_EACH_ENTRY( face, &family->faces, struct gdi_font_face, entry )
+            {
+                if (!face->file) continue;
+                add_gdi_font_link_entry( link, family->family_name, face->fs );
+                TRACE( "Added macOS CJK fallback %s to %s\n",
+                       debugstr_w(family->family_name), debugstr_w(windows_families[i]) );
+                break;
+            }
+            if (!list_empty( &link->links )) break;
+        }
+    }
+}
+#endif
+
 /* see TranslateCharsetInfo */
 BOOL translate_charset_info( DWORD *src, CHARSETINFO *cs, DWORD flags )
 {
@@ -3038,6 +3102,8 @@ static void update_codepage( UINT screen_dpi )
     UINT i;
     UINT font_dpi = 0;
     BOOL done = FALSE, cp_match = FALSE;
+    void *ansi_data = NtCurrentTeb()->Peb->AnsiCodePageData;
+    void *oem_data = NtCurrentTeb()->Peb->OemCodePageData;
 
     static const WCHAR log_pixelsW[] = {'L','o','g','P','i','x','e','l','s',0};
 
@@ -3045,13 +3111,19 @@ static void update_codepage( UINT screen_dpi )
     if (size == sizeof(DWORD) && info->Type == REG_DWORD)
         font_dpi = *(DWORD *)info->Data;
 
+#if defined(__APPLE__) && defined(__aarch64__)
+    ansi_data = madeira_se_wow64_guest_to_host( (ULONG_PTR)ansi_data );
+    oem_data = madeira_se_wow64_guest_to_host( (ULONG_PTR)oem_data );
+#endif
+    TRACE( "Madeira-SE codepage PEB %p ANSI %p OEM %p\n",
+           NtCurrentTeb()->Peb, ansi_data, oem_data );
     RtlInitCodePageTable( utf8_hdr, &utf8_cp );
-    if (NtCurrentTeb()->Peb->AnsiCodePageData)
-        RtlInitCodePageTable( NtCurrentTeb()->Peb->AnsiCodePageData, &ansi_cp );
+    if (ansi_data)
+        RtlInitCodePageTable( ansi_data, &ansi_cp );
     else
         ansi_cp = utf8_cp;
-    if (NtCurrentTeb()->Peb->OemCodePageData)
-        RtlInitCodePageTable( NtCurrentTeb()->Peb->OemCodePageData, &oem_cp );
+    if (oem_data)
+        RtlInitCodePageTable( oem_data, &oem_cp );
     else
         oem_cp = utf8_cp;
     snprintf( cpbuf, sizeof(cpbuf), "%u,%u", ansi_cp.CodePage, oem_cp.CodePage );
@@ -6740,17 +6812,25 @@ UINT font_init(void)
         {'S','o','f','t','w','a','r','e','\\','W','i','n','e','\\','F','o','n','t','s'};
     static const WCHAR cacheW[] = {'C','a','c','h','e'};
 
+    TRACE( "Madeira-SE font_init: open HKCU\n" );
     if (!(hkcu_key = open_hkcu())) return 0;
+    TRACE( "Madeira-SE font_init: create Wine fonts key\n" );
     wine_fonts_key = reg_create_key( hkcu_key, wine_fonts_keyW, sizeof(wine_fonts_keyW), 0, NULL );
+    TRACE( "Madeira-SE font_init: read font options\n" );
     if (wine_fonts_key) dpi = init_font_options();
     if (!dpi) return 96;
+    TRACE( "Madeira-SE font_init: codepage at %u dpi\n", dpi );
     update_codepage( dpi );
 
+    TRACE( "Madeira-SE font_init: FreeType\n" );
     if (!(font_funcs = init_freetype_lib()))
         return dpi;
 
+    TRACE( "Madeira-SE font_init: bitmap fonts\n" );
     load_system_bitmap_fonts();
+    TRACE( "Madeira-SE font_init: filesystem fonts\n" );
     load_file_system_fonts();
+    TRACE( "Madeira-SE font_init: host fonts\n" );
     font_funcs->load_fonts();
 
     attr.Attributes = OBJ_OPENIF;
@@ -6782,6 +6862,9 @@ UINT font_init(void)
     load_gdi_font_subst();
     load_gdi_font_replacements();
     load_system_links();
+#ifdef __APPLE__
+    add_macos_cjk_fallbacks();
+#endif
     dump_gdi_font_list();
     dump_gdi_font_subst();
     return dpi;

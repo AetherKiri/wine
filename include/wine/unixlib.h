@@ -27,6 +27,22 @@
 
 #include <winternl.h>
 
+/*
+ * Native Unix libraries normally dereference 32-bit WoW64 pointers directly,
+ * since desktop Wine can map the guest address space below 4 GiB.  XNU keeps
+ * that range unavailable to an arm64 process, so Madeira-SE stores PE32 memory
+ * in its fixed biased arena.  Keep the standard WoW64 wrapper sources intact
+ * and translate their ULongToPtr()/UIntToPtr() conversions at this common
+ * boundary.
+ */
+#if defined(WINE_UNIX_LIB) && defined(__APPLE__) && defined(__aarch64__)
+# include "wine/madeira_se.h"
+# undef ULongToPtr
+# define ULongToPtr(value) madeira_se_wow64_guest_to_host( (ULONG)(value) )
+# undef UIntToPtr
+# define UIntToPtr(value) madeira_se_wow64_guest_to_host( (UINT)(value) )
+#endif
+
 typedef UINT64 unixlib_handle_t;
 typedef UINT64 unixlib_module_t;
 

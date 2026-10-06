@@ -108,6 +108,55 @@ AddReg=\
     VCRuntime.ntarm64,\
     VersionInfo
 
+; Madeira-SE already materializes the complete guest DLL tree before Wine
+; starts.  Keep the registry/resource setup from BaseInstall but omit its
+; large CopyFiles queue; interpreting that redundant queue through TCTI makes
+; first launch take minutes.  Desktop mode continues to use DefaultInstall.
+[MadeiraSEBaseInstall]
+; The standalone launcher already stages every guest DLL.  Registering Wine's
+; full multimedia/COM list here starts dozens of interpreted helper loads and
+; can leave the x86-64 bootstrap waiting on a setupapi callback.  Keep the
+; small resource-backed set needed by the direct runtime and let applications
+; load the remaining DLLs on demand.
+RegisterDlls=MadeiraSERegisterDllsSection
+UpdateInis=SystemIni
+AddReg=\
+    Classes,\
+    ContentIndex,\
+    ControlClass,\
+    CurrentVersion,\
+    Debugger,\
+    DirectX,\
+    Fonts,\
+    LicenseInformation,\
+    MCI,\
+    Misc,\
+    OLE,\
+    Printing,\
+    Services, \
+    SessionMgr,\
+    ThemeManager
+
+[MadeiraSEInstall]
+Needs=MadeiraSEBaseInstall
+AddReg=VCRuntime.ntx86
+
+[MadeiraSEInstall.ntx86]
+Needs=MadeiraSEBaseInstall
+AddReg=VCRuntime.ntx86,VersionInfo
+
+[MadeiraSEInstall.ntamd64]
+Needs=MadeiraSEBaseInstall
+AddReg=CurrentVersionWow64.ntamd64,VCRuntime.ntamd64,VersionInfo
+
+; The full WineFakeDlls pass registers embedded COM resources while copying
+; every build artifact.  Madeira-SE materializes the guest binaries itself,
+; so register only the extra resource-backed classes needed by its lightweight
+; prefix bootstrap.  The common multimedia self-registration list above is
+; still processed through RegisterDllsSection.
+[MadeiraSERegisterDllsSection]
+11,,mmdevapi.dll,1
+
 [BaseWow64Install]
 RegisterDlls=RegisterDllsSection
 WineFakeDlls=FakeDllsWin32,FakeDllsWow64
@@ -398,7 +447,7 @@ HKLM,%CurrentVersion%,"ProgramFilesDir (Arm)",,"C:\Program Files (Arm)"
 HKLM,%CurrentVersion%,"CommonFilesDir (Arm)",,"C:\Program Files (Arm)\Common Files"
 HKLM,Software\Microsoft\Wow64\amd64,,2,"xtajit64.dll"
 HKLM,Software\Microsoft\Wow64\arm,,2,"wowarmhw.dll"
-HKLM,Software\Microsoft\Wow64\x86,,2,"xtajit.dll"
+HKLM,Software\Microsoft\Wow64\x86,,2,"madeiracpu.dll"
 
 [CurrentVersionWow64.ntx86]
 HKLM,%CurrentVersion%,"ProgramFilesDir (x86)",,"%16422%"
@@ -462,7 +511,7 @@ HKLM,%Control%\Session Manager\Environment,"windir",0x00020000,"%SystemRoot%"
 HKLM,%Control%\Session Manager\Environment,"winsysdir",,"%11%"
 HKLM,%Control%\Session Manager\KnownDLLs,"_wow64cpu",,"wow64cpu.dll"
 HKLM,%Control%\Session Manager\KnownDLLs,"_wowarmhw",,"wowarmhw.dll"
-HKLM,%Control%\Session Manager\KnownDLLs,"_xtajit",,"xtajit.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"_madeiracpu",,"madeiracpu.dll"
 HKLM,%Control%\Session Manager\KnownDLLs,"advapi32",,"advapi32.dll"
 HKLM,%Control%\Session Manager\KnownDLLs,"clbcatq",,"clbcatq.dll"
 HKLM,%Control%\Session Manager\KnownDLLs,"combase",,"combase.dll"
@@ -492,7 +541,7 @@ HKLM,%Control%\Session Manager\KnownDLLs,"wldap32",,"wldap32.dll"
 HKLM,%Control%\Session Manager\KnownDLLs,"wow64",,"wow64.dll"
 HKLM,%Control%\Session Manager\KnownDLLs,"wow64win",,"wow64win.dll"
 HKLM,%Control%\Session Manager\KnownDLLs,"ws2_32",,"ws2_32.dll"
-HKLM,%Control%\Session Manager\KnownDLLs,"xtajit",,"xtajit.dll"
+HKLM,%Control%\Session Manager\KnownDLLs,"madeiracpu",,"madeiracpu.dll"
 HKLM,%Control%\Session Manager\KnownDLLs,"xtajit64",,"xtajit64.dll"
 HKLM,%Control%\Session Manager\Memory Management,PagingFiles,,"%24%\pagefile.sys 27 77"
 HKLM,%Control%\Session Manager\Memory Management,WriteWatch,0x00040002,1
