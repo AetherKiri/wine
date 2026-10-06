@@ -1185,6 +1185,41 @@ struct macdrv_client_surface *macdrv_client_surface_create(HWND hwnd)
     return surface;
 }
 
+/* DXMT creates a Metal view directly from a HWND, without going through the
+ * OpenGL/Vulkan client-surface entry points that normally allocate the Cocoa
+ * content view. Keep one client surface attached to the Wine window so its
+ * view remains valid for the lifetime of the native swapchain. */
+macdrv_view macdrv_get_client_view(HWND hwnd)
+{
+    struct macdrv_win_data *data;
+    struct macdrv_client_surface *surface = NULL;
+    macdrv_view view = NULL;
+
+    data = get_win_data(hwnd);
+    if (!data) return NULL;
+    if (data->client_view)
+    {
+        view = data->client_view;
+        release_win_data(data);
+        return view;
+    }
+    release_win_data(data);
+
+    surface = macdrv_client_surface_create(hwnd);
+    if (!surface) return NULL;
+
+    data = get_win_data(hwnd);
+    if (data && data->client_view == surface->cocoa_view)
+    {
+        data->dxmt_client_surface = surface;
+        view = data->client_view;
+    }
+    else if (data) view = data->client_view;
+    if (data) release_win_data(data);
+    if (!view) client_surface_release(&surface->client);
+    return view;
+}
+
 /**********************************************************************
  *              SetDesktopWindow   (MACDRV.@)
  */
@@ -1258,6 +1293,7 @@ LRESULT macdrv_DesktopWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 void macdrv_DestroyWindow(HWND hwnd)
 {
     struct macdrv_win_data *data;
+    struct macdrv_client_surface *dxmt_surface;
 
     TRACE("%p\n", hwnd);
 
@@ -1266,10 +1302,14 @@ void macdrv_DestroyWindow(HWND hwnd)
     if (hwnd == get_capture()) macdrv_SetCapture(0, 0);
     if (data->drag_event) NtSetEvent(data->drag_event, NULL);
 
+    dxmt_surface = data->dxmt_client_surface;
+    data->dxmt_client_surface = NULL;
+
     destroy_cocoa_window(data);
 
     CFDictionaryRemoveValue(win_datas, hwnd);
     release_win_data(data);
+    if (dxmt_surface) client_surface_release(&dxmt_surface->client);
     free(data);
 }
 

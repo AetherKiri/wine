@@ -869,7 +869,16 @@ static NTSTATUS load_builtin_unixlib( void *module, BOOL wow, const void **funcs
     {
         if (builtin->unix_path && !builtin->unix_handle)
         {
-            builtin->unix_handle = dlopen( builtin->unix_path, RTLD_NOW );
+            /* DXMT obtains the native macOS Metal bridge with
+             * dlsym(RTLD_DEFAULT, ...).  Unix libraries are normally loaded
+             * RTLD_LOCAL and Wine hides their symbols, so make only the
+             * native mac driver visible process-wide.  The explicit path
+             * check keeps every other builtin isolated as before. */
+            int dlopen_flags = RTLD_NOW;
+            if (strstr( builtin->unix_path, "/winemac.so" ) ||
+                !strcmp( builtin->unix_path, "winemac.so" ))
+                dlopen_flags |= RTLD_GLOBAL;
+            builtin->unix_handle = dlopen( builtin->unix_path, dlopen_flags );
             if (!builtin->unix_handle)
                 WARN_(module)( "failed to load %s: %s\n", debugstr_a(builtin->unix_path), dlerror() );
         }

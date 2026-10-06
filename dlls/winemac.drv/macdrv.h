@@ -178,6 +178,7 @@ struct macdrv_win_data
     HWND                hwnd;                   /* hwnd that this private data belongs to */
     macdrv_window       cocoa_window;
     macdrv_view         client_view;
+    struct macdrv_client_surface *dxmt_client_surface;
     struct window_rects rects;                  /* window rects in monitor DPI, relative to parent client area */
     int                 pixel_format;           /* pixel format for GL */
     HANDLE              drag_event;             /* event to signal that Cocoa-driven window dragging has ended */
@@ -204,9 +205,10 @@ static inline struct macdrv_client_surface *impl_from_client_surface(struct clie
 }
 
 extern struct macdrv_client_surface *macdrv_client_surface_create(HWND hwnd);
+extern MACDRV_DXMT_EXPORT macdrv_view macdrv_get_client_view(HWND hwnd);
 
-extern struct macdrv_win_data *get_win_data(HWND hwnd);
-extern void release_win_data(struct macdrv_win_data *data);
+extern MACDRV_DXMT_EXPORT struct macdrv_win_data *get_win_data(HWND hwnd);
+extern MACDRV_DXMT_EXPORT void release_win_data(struct macdrv_win_data *data);
 extern void init_win_context(void);
 extern macdrv_window macdrv_get_cocoa_window(HWND hwnd, BOOL require_on_screen);
 extern RGNDATA *get_region_data(HRGN hrgn, HDC hdc_lptodp);

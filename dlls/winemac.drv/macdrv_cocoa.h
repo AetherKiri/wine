@@ -68,6 +68,15 @@
 
 #include "macdrv_res.h"
 
+/* DXMT's Metal unix side discovers the native Cocoa bridge through
+ * dlsym(RTLD_DEFAULT, ...). Wine normally hides Unix-library symbols, so the
+ * small subset used by DXMT must be exported explicitly on macOS. */
+#if defined(__GNUC__) || defined(__clang__)
+# define MACDRV_DXMT_EXPORT __attribute__((visibility("default")))
+#else
+# define MACDRV_DXMT_EXPORT
+#endif
+
 
 /* Must match the values of Cocoa's NSDragOperation enum. */
 enum {
@@ -522,11 +531,11 @@ extern void macdrv_set_view_superview(macdrv_view v, macdrv_view s, macdrv_windo
 extern void macdrv_set_view_hidden(macdrv_view v, bool hidden);
 extern void macdrv_add_view_opengl_context(macdrv_view v, macdrv_opengl_context c);
 extern void macdrv_remove_view_opengl_context(macdrv_view v, macdrv_opengl_context c);
-extern macdrv_metal_device macdrv_create_metal_device(void);
-extern void macdrv_release_metal_device(macdrv_metal_device d);
-extern macdrv_metal_view macdrv_view_create_metal_view(macdrv_view v, macdrv_metal_device d);
-extern macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v);
-extern void macdrv_view_release_metal_view(macdrv_metal_view v);
+extern MACDRV_DXMT_EXPORT macdrv_metal_device macdrv_create_metal_device(void);
+extern MACDRV_DXMT_EXPORT void macdrv_release_metal_device(macdrv_metal_device d);
+extern MACDRV_DXMT_EXPORT macdrv_metal_view macdrv_view_create_metal_view(macdrv_view v, macdrv_metal_device d);
+extern MACDRV_DXMT_EXPORT macdrv_metal_layer macdrv_view_get_metal_layer(macdrv_metal_view v);
+extern MACDRV_DXMT_EXPORT void macdrv_view_release_metal_view(macdrv_metal_view v);
 extern bool macdrv_get_view_backing_size(macdrv_view v, int backing_size[2]);
 extern void macdrv_set_view_backing_size(macdrv_view v, const int backing_size[2]);
 extern uint32_t macdrv_window_background_color(void);
