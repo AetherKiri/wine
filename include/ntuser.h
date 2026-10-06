@@ -1219,6 +1219,8 @@ enum
     NtUserCallTwoParam_SetIMECompositionRect,
     NtUserCallTwoParam_AdjustWindowRect,
     NtUserCallTwoParam_GetVirtualScreenRect,
+    /* iOS-Madeira: query the native gamepad bridge. */
+    NtUserCallTwoParam_GetGamepadState,
     /* temporary exports */
     NtUserAllocWinProc,
 };
