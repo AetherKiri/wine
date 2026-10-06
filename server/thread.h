@@ -116,6 +116,10 @@ struct thread
      * GetThreadContext/debug paths, so the counter cannot distinguish "capture and
      * let it run" from "capture and keep it stopped". */
     int                    ios_mach_suspended;
+    /* Active WoW64 syscall-frame capture used by mach_ios.c. Keep appended so
+     * the prebuilt server members above retain their frozen offsets. */
+    unsigned long long     ios_ctx_frame;
+    unsigned int           ios_ctx_seq;
 #endif
 };
 
