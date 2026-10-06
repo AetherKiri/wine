@@ -283,7 +283,11 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
             (void)ctx32_ptr;
             (void)ctx64_ptr;
             flags = ctx.ContextFlags & ~CONTEXT_I386_XSTATE;
-            context_length = 0;
+            /* Keep the native WoW64 frame compatible with Wine's i386
+             * KiUserExceptionDispatcher.  The dispatcher consumes the
+             * CONTEXT_EX immediately after I386_CONTEXT even when no XSTATE
+             * payload is present. */
+            context_length = sizeof(I386_CONTEXT) + sizeof(CONTEXT_EX);
 #endif
 
             esp = LOWORD(ctx.SegSs) != ss32_sel ? NtCurrentTeb32()->SystemReserved1[0] : ctx.Esp;
@@ -302,8 +306,16 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
             RtlInitializeExtendedContext( &stack->context, flags, &context_ex );
             if (src_ex) RtlCopyExtendedContext( context_ex, WOW64_CONTEXT_XSTATE, src_ex );
 #else
-            (void)context_ex;
             (void)src_ex;
+            context_ex = (CONTEXT_EX *)(stack->context.ExtendedRegisters +
+                                        sizeof(stack->context.ExtendedRegisters));
+            memset( context_ex, 0, sizeof(*context_ex) );
+            context_ex->All.Length = sizeof(I386_CONTEXT) + 24;
+            context_ex->All.Offset = -(LONG)sizeof(I386_CONTEXT);
+            context_ex->Legacy.Length = sizeof(I386_CONTEXT);
+            context_ex->Legacy.Offset = -(LONG)sizeof(I386_CONTEXT);
+            context_ex->XState.Length = 25;
+            (void)flags;
 #endif
 
             /* adjust Eip for breakpoints in software emulation (hardware exceptions already adjust Rip) */

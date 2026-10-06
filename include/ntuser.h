@@ -1219,10 +1219,11 @@ enum
     NtUserCallTwoParam_SetIMECompositionRect,
     NtUserCallTwoParam_AdjustWindowRect,
     NtUserCallTwoParam_GetVirtualScreenRect,
-    /* iOS-Madeira: query the native gamepad bridge. */
-    NtUserCallTwoParam_GetGamepadState,
     /* temporary exports */
     NtUserAllocWinProc,
+    /* iOS-Madeira: append the native gamepad bridge without renumbering the
+     * existing Wine selectors. */
+    NtUserCallTwoParam_GetGamepadState,
 };
 
 static inline DLGPROC NtUserGetDialogProc( DLGPROC proc, BOOL ansi )
