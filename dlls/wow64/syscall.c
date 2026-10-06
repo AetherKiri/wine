@@ -253,6 +253,9 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
 
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
 
+            TRACE( "guest exception setup code %#lx address %#lx current eip %#lx esp %#lx\n",
+                   rec->ExceptionCode, rec->ExceptionAddress, ctx.Eip, ctx.Esp );
+
 #ifndef MADEIRA_SE_WOW64_HOST
             if (ctx32_ptr)
             {
@@ -395,7 +398,19 @@ void WINAPI raise_exception( EXCEPTION_RECORD32 *rec32, void *ctx32,
 void WINAPI raise_exception( EXCEPTION_RECORD32 *rec32, void *ctx32,
                              BOOL first_chance, EXCEPTION_RECORD *rec )
 {
-    (void)first_chance;
+    /* The first-chance exception enters the guest dispatcher.  If that
+     * dispatcher cannot find a handler it calls NtRaiseException again with
+     * first_chance == FALSE.  Native Wine terminates the process in that
+     * second-chance path; feeding it back into KiUserExceptionDispatcher
+     * would redispatch the same fault forever and eventually corrupt the
+     * guest stack. */
+    if (!first_chance)
+    {
+        ERR( "unhandled guest exception code %#lx at %p; terminating pseudo-process\n",
+             rec32->ExceptionCode, madeira_se_wow64_guest_to_host( rec32->ExceptionAddress ) );
+        NtTerminateProcess( GetCurrentProcess(), rec32->ExceptionCode );
+        return;
+    }
     (void)rec;
     call_user_exception_dispatcher( rec32, ctx32, NULL );
 }
@@ -1706,6 +1721,8 @@ NTSTATUS WINAPI Wow64RaiseException( int code, EXCEPTION_RECORD *rec )
 
         ctx32.i386.ContextFlags = CONTEXT_I386_ALL;
         pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx32.i386 );
+        TRACE( "raise guest exception vector %d record code %#lx address %#lx current eip %#lx esp %#lx\n",
+               code, rec->ExceptionCode, rec->ExceptionAddress, ctx32.i386.Eip, ctx32.i386.Esp );
         if (code == -1) break;
         int_rec.ExceptionAddress = (void *)(ULONG_PTR)ctx32.i386.Eip;
         switch (code)

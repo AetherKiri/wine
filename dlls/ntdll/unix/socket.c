@@ -93,7 +93,22 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(winsock);
 
-#define u64_to_user_ptr(u) ((void *)(uintptr_t)(u))
+#ifdef MADEIRA_SE_WOW64_BIASED_ADDRESS_SPACE
+/*
+ * Native ntdll receives the AFD request buffer after the WoW64 thunk has
+ * translated the top-level pointer.  Pointer fields inside that buffer still
+ * contain 32-bit guest addresses, however.  The regular WoW64 build can
+ * dereference those addresses directly because it owns the low 4 GiB; the
+ * Madeira host stores the same guest address space in its biased arena.
+ */
+static inline void *u64_to_user_ptr( ULONGLONG value )
+{
+    if (in_wow64_call()) return madeira_se_wow64_guest_to_host( (uint32_t)value );
+    return (void *)(uintptr_t)value;
+}
+#else
+# define u64_to_user_ptr(u) ((void *)(uintptr_t)(u))
+#endif
 
 union unix_sockaddr
 {
@@ -1740,6 +1755,9 @@ static NTSTATUS sock_ioctl_send( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
     struct async_send_ioctl *async;
     DWORD async_size;
     unsigned int i;
+
+    TRACE( "sock_ioctl_send buffers %p count %u addr %p len %u wow64 %d\n",
+           buffers_ptr, count, addr, addr_len, in_wow64_call() );
 
     async_size = offsetof( struct async_send_ioctl, iov[count] );
 
