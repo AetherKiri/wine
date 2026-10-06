@@ -254,7 +254,8 @@ static void __attribute__((used)) call_user_exception_dispatcher( EXCEPTION_RECO
             pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx );
 
             TRACE( "guest exception setup code %#lx address %#lx current eip %#lx esp %#lx\n",
-                   rec->ExceptionCode, rec->ExceptionAddress, ctx.Eip, ctx.Esp );
+                   (unsigned long)rec->ExceptionCode, (unsigned long)(ULONG_PTR)rec->ExceptionAddress,
+                   (unsigned long)ctx.Eip, (unsigned long)ctx.Esp );
 
 #ifndef MADEIRA_SE_WOW64_HOST
             if (ctx32_ptr)
@@ -407,7 +408,8 @@ void WINAPI raise_exception( EXCEPTION_RECORD32 *rec32, void *ctx32,
     if (!first_chance)
     {
         ERR( "unhandled guest exception code %#lx at %p; terminating pseudo-process\n",
-             rec32->ExceptionCode, madeira_se_wow64_guest_to_host( rec32->ExceptionAddress ) );
+             (unsigned long)rec32->ExceptionCode,
+             madeira_se_wow64_guest_to_host( rec32->ExceptionAddress ) );
         NtTerminateProcess( GetCurrentProcess(), rec32->ExceptionCode );
         return;
     }
@@ -1722,7 +1724,9 @@ NTSTATUS WINAPI Wow64RaiseException( int code, EXCEPTION_RECORD *rec )
         ctx32.i386.ContextFlags = CONTEXT_I386_ALL;
         pBTCpuGetContext( GetCurrentThread(), GetCurrentProcess(), NULL, &ctx32.i386 );
         TRACE( "raise guest exception vector %d record code %#lx address %#lx current eip %#lx esp %#lx\n",
-               code, rec->ExceptionCode, rec->ExceptionAddress, ctx32.i386.Eip, ctx32.i386.Esp );
+               code, (unsigned long)rec->ExceptionCode,
+               (unsigned long)(ULONG_PTR)rec->ExceptionAddress,
+               (unsigned long)ctx32.i386.Eip, (unsigned long)ctx32.i386.Esp );
         if (code == -1) break;
         int_rec.ExceptionAddress = (void *)(ULONG_PTR)ctx32.i386.Eip;
         switch (code)
