@@ -4850,7 +4850,7 @@ void WINAPI LdrShutdownThread(void)
     /* don't do any detach calls if process is exiting */
     if (process_detaching) return;
 
-    /* iOS-Madeira ml843 [detach-probe]: is the FEX emulator stack top already
+    /* iOS-Madeira ml843 [detach-probe]: is the CPU emulator stack top already
      * sitting in this thread's TLS BEFORE any detach cleanup runs?
      *
      * Two fresh UE5 runs died in the engine allocator freeing exactly this
@@ -4860,6 +4860,10 @@ void WINAPI LdrShutdownThread(void)
      * the fatal, the detach path itself introduced it. Placed ABOVE the FLS
      * pass on purpose: that is the first cleanup that runs per-thread
      * destructors. Passive, bounded, fault-safe reads only. */
+    /* CHPE_V2_CPU_AREA_INFO is a Win64 TEB field.  The same ntdll source is
+     * compiled for the i386 guest farm, where _WIN64 is intentionally absent
+     * and the 32-bit TEB has no such member. */
+#ifdef _WIN64
     {
         static LONG probed;
         if (InterlockedIncrement( &probed ) <= 12)
@@ -4912,6 +4916,7 @@ void WINAPI LdrShutdownThread(void)
             }
         }
     }
+#endif
 
     RtlProcessFlsData( NtCurrentTeb()->FlsSlots, 1 );
 
