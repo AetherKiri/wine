@@ -2033,6 +2033,8 @@ typedef enum _PROCESSINFOCLASS {
 #ifdef __WINESRC__
     ProcessWineMakeProcessSystem = 1000,
     ProcessWineGrantAdminToken = 1002,
+    /* iOS-Madeira: query the reserved 32-bit guest window for WoW64. */
+    ProcessWineIosWowGuestBase = 1003,
 #endif
 } PROCESSINFOCLASS;
 
