@@ -42,6 +42,20 @@ static inline void *madeira_se_wow64_guest_to_host( uint32_t address )
     return (void *)(uintptr_t)(MADEIRA_SE_WOW64_GUEST_BIAS + address);
 }
 
+/*
+ * User32 represents some 32-bit callbacks as WINPROC handles.  They use the
+ * top 16 bits as a sentinel (0xffffxxxx), rather than pointing into the
+ * guest address space.  Keep those handles as numeric values so win32u can
+ * resolve them through its winproc table; biasing them would turn a valid
+ * handle into an invalid host address and the guest would later jump to the
+ * original 0xffffxxxx value.
+ */
+static inline void *madeira_se_wow64_guest_callback_to_host( uint32_t address )
+{
+    if ((address >> 16) == 0xffffu) return (void *)(uintptr_t)address;
+    return madeira_se_wow64_guest_to_host( address );
+}
+
 static inline uint32_t madeira_se_wow64_host_to_guest( const void *address )
 {
     uintptr_t value = (uintptr_t)address;

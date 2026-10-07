@@ -1764,14 +1764,16 @@ static void maybe_apply_madeira_se_window_size( WINDOWPOS *winpos )
     static INT target_width, target_height;
     const char *value;
     char *end;
-    long width, height;
+    long requested_width, requested_height;
     WND *win;
     RECT target;
+    RECT desktop;
     DWORD style, ex_style;
     BOOL has_menu;
+    BOOL fullscreen;
+    INT window_width, window_height;
     UINT dpi;
 
-    if (winpos->flags & SWP_NOSIZE) return;
     if (!getenv( "MADEIRA_SE_NO_DESKTOP" ) || getenv( "WINEBOOTSTRAPMODE" ) ||
         getenv( "MADEIRA_SE_NO_WINDOW_LOCK" )) return;
     if (InterlockedCompareExchange( &initialized, 1, 0 ) == 0)
@@ -1779,15 +1781,15 @@ static void maybe_apply_madeira_se_window_size( WINDOWPOS *winpos )
         value = getenv( "MADEIRA_SE_WINDOW_SIZE" );
         if (value)
         {
-            width = strtol( value, &end, 10 );
+            requested_width = strtol( value, &end, 10 );
             if (*end == 'x' || *end == 'X')
             {
-                height = strtol( end + 1, &end, 10 );
-                if (!*end && width >= 320 && width <= 7680 &&
-                    height >= 200 && height <= 4320)
+                requested_height = strtol( end + 1, &end, 10 );
+                if (!*end && requested_width >= 320 && requested_width <= 7680 &&
+                    requested_height >= 200 && requested_height <= 4320)
                 {
-                    target_width = width;
-                    target_height = height;
+                    target_width = requested_width;
+                    target_height = requested_height;
                 }
             }
         }
@@ -1800,11 +1802,16 @@ static void maybe_apply_madeira_se_window_size( WINDOWPOS *winpos )
     style = win->dwStyle;
     ex_style = win->dwExStyle;
     has_menu = !(style & WS_CHILD) && win->wIDmenu;
+    window_width = (winpos->flags & SWP_NOSIZE) ?
+        win->rects.window.right - win->rects.window.left : winpos->cx;
+    window_height = (winpos->flags & SWP_NOSIZE) ?
+        win->rects.window.bottom - win->rects.window.top : winpos->cy;
     /* A borderless window at monitor size is the game's full-screen mode.  It
      * must retain the monitor dimensions even after the main window has been
      * identified, so the lock only affects windowed resizes. */
-    if ((style & WS_POPUP) && !(style & (WS_CAPTION | WS_THICKFRAME)) &&
-        winpos->cx >= 1024 && winpos->cy >= 600)
+    fullscreen = (style & WS_POPUP) && !(style & (WS_CAPTION | WS_THICKFRAME)) &&
+        window_width >= 1024 && window_height >= 600;
+    if (fullscreen)
     {
         release_win_ptr( win );
         return;
@@ -1819,7 +1826,7 @@ static void maybe_apply_madeira_se_window_size( WINDOWPOS *winpos )
     {
         if (win == WND_DESKTOP || win->parent != get_desktop_window() ||
             (style & WS_CHILD) || (ex_style & (WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)) ||
-            winpos->cx < 640 || winpos->cy < 400)
+            window_width < 640 || window_height < 400)
         {
             release_win_ptr( win );
             return;
@@ -1836,28 +1843,67 @@ static void maybe_apply_madeira_se_window_size( WINDOWPOS *winpos )
         return;
     }
 
-    if (winpos->cx < 100 || winpos->cy < 100)
+    if (!(winpos->flags & SWP_NOSIZE) && (winpos->cx < 100 || winpos->cy < 100))
     {
         release_win_ptr( win );
         return;
     }
 
-    target.left = target.top = 0;
-    target.right = target_width;
-    target.bottom = target_height;
-    dpi = get_thread_dpi();
-    if (NtUserAdjustWindowRect( &target, style, has_menu, ex_style, dpi ))
+    if (!(winpos->flags & SWP_NOSIZE))
     {
-        winpos->cx = target.right - target.left;
-        winpos->cy = target.bottom - target.top;
+        target.left = target.top = 0;
+        target.right = target_width;
+        target.bottom = target_height;
+        dpi = get_thread_dpi();
+        if (NtUserAdjustWindowRect( &target, style, has_menu, ex_style, dpi ))
+        {
+            winpos->cx = target.right - target.left;
+            winpos->cy = target.bottom - target.top;
+        }
+        else
+        {
+            winpos->cx = target_width;
+            winpos->cy = target_height;
+        }
+        window_width = winpos->cx;
+        window_height = winpos->cy;
+        TRACE( "Madeira-SE initial client size %dx%d -> window size %dx%d for %p\n",
+               target_width, target_height, winpos->cx, winpos->cy, winpos->hwnd );
     }
-    else
+
+    /* A few legacy engines use the display metrics returned during the
+     * mode-selection dialog as a temporary parking position.  On a Retina
+     * host those metrics can be in raw pixels while Wine's window driver is
+     * in points, producing positions such as (12096,7856) for a 1512x982
+     * desktop.  With no explorer desktop there is no window manager to bring
+     * that window back.  Keep the standalone game's top-level window inside
+     * the virtual screen while preserving its requested size. */
+    if (!(winpos->flags & SWP_NOMOVE) && window_width > 0 && window_height > 0)
     {
-        winpos->cx = target_width;
-        winpos->cy = target_height;
+        desktop = get_virtual_screen_rect( get_thread_dpi(), MDT_DEFAULT );
+        if (!IsRectEmpty( &desktop ) &&
+            ((long)winpos->x >= desktop.right || (long)winpos->y >= desktop.bottom ||
+             (long)winpos->x + window_width <= desktop.left ||
+             (long)winpos->y + window_height <= desktop.top))
+        {
+            winpos->x = desktop.left + max( 0, (desktop.right - desktop.left - window_width) / 2 );
+            winpos->y = desktop.top + max( 0, (desktop.bottom - desktop.top - window_height) / 2 );
+            TRACE( "Madeira-SE clamped off-screen window %p to %d,%d within %s\n",
+                   winpos->hwnd, winpos->x, winpos->y, wine_dbgstr_rect( &desktop ) );
+        }
+        else if (!IsRectEmpty( &desktop ) &&
+                 ((long)winpos->x < desktop.left || (long)winpos->y < desktop.top ||
+                  (long)winpos->x + window_width > desktop.right ||
+                  (long)winpos->y + window_height > desktop.bottom))
+        {
+            INT max_x = max( desktop.left, desktop.right - window_width );
+            INT max_y = max( desktop.top, desktop.bottom - window_height );
+            winpos->x = min( max( winpos->x, desktop.left ), max_x );
+            winpos->y = min( max( winpos->y, desktop.top ), max_y );
+            TRACE( "Madeira-SE fitted partially off-screen window %p to %d,%d within %s\n",
+                   winpos->hwnd, winpos->x, winpos->y, wine_dbgstr_rect( &desktop ) );
+        }
     }
-    TRACE( "Madeira-SE initial client size %dx%d -> window size %dx%d for %p\n",
-           target_width, target_height, winpos->cx, winpos->cy, winpos->hwnd );
     release_win_ptr( win );
 }
 

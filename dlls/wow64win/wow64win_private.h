@@ -58,6 +58,18 @@ typedef struct
 static inline ULONG get_ulong( UINT **args ) { return *(*args)++; }
 static inline HANDLE get_handle( UINT **args ) { return LongToHandle( *(*args)++ ); }
 static inline void *get_ptr( UINT **args ) { return ULongToPtr( *(*args)++ ); }
+static inline void *get_callback_value( ULONG value )
+{
+#ifdef MADEIRA_SE_WOW64WIN_HOST
+    return madeira_se_wow64_guest_callback_to_host( value );
+#else
+    return UlongToPtr( value );
+#endif
+}
+static inline void *get_callback( UINT **args )
+{
+    return get_callback_value( get_ulong( args ) );
+}
 
 static inline void **addr_32to64( void **addr, ULONG *addr32 )
 {

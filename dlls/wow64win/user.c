@@ -2290,7 +2290,7 @@ NTSTATUS WINAPI wow64_NtUserEnumDisplayMonitors( UINT *args )
 {
     HDC hdc = get_handle( &args );
     RECT *rect = get_ptr( &args );
-    MONITORENUMPROC proc = get_ptr( &args );
+    MONITORENUMPROC proc = get_callback( &args );
     LPARAM lp = get_ulong( &args );
 
     return NtUserEnumDisplayMonitors( hdc, rect, proc, lp );
@@ -3712,7 +3712,14 @@ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
             struct win_proc_params32 *params32 = result_info;
             struct win_proc_params params;
 
-            if (type == NtUserCallWindowProc) params.func = UlongToPtr( params32->func );
+            if (type == NtUserCallWindowProc)
+            {
+#ifdef MADEIRA_SE_WOW64WIN_HOST
+                params.func = madeira_se_wow64_guest_callback_to_host( params32->func );
+#else
+                params.func = UlongToPtr( params32->func );
+#endif
+            }
 
             if (!NtUserMessageCall( hwnd, msg, wparam, lparam, &params, type, ansi ))
                 return FALSE;
@@ -3766,7 +3773,7 @@ NTSTATUS WINAPI wow64_NtUserMessageCall( UINT *args )
             } *params32 = result_info;
             struct send_message_callback_params params;
 
-            params.callback = UlongToPtr( params32->callback );
+            params.callback = get_callback_value( params32->callback );
             params.data = params32->data;
             return message_call_32to64( hwnd, msg, wparam, lparam, &params, type, ansi );
         }
@@ -4652,7 +4659,7 @@ NTSTATUS WINAPI wow64_NtUserSetTimer( UINT *args )
     HWND hwnd = get_handle( &args );
     UINT_PTR id = get_ulong( &args );
     UINT timeout = get_ulong( &args );
-    TIMERPROC proc = get_ptr( &args );
+    TIMERPROC proc = get_callback( &args );
     ULONG tolerance = get_ulong( &args );
 
     return NtUserSetTimer( hwnd, id, timeout, proc, tolerance );
@@ -4664,7 +4671,7 @@ NTSTATUS WINAPI wow64_NtUserSetWinEventHook( UINT *args )
     DWORD event_max = get_ulong( &args );
     HMODULE inst = get_ptr( &args );
     UNICODE_STRING32 *module32 = get_ptr( &args );
-    WINEVENTPROC proc = get_ptr(&args );
+    WINEVENTPROC proc = get_callback(&args );
     DWORD pid = get_ulong( &args );
     DWORD tid = get_ulong( &args );
     DWORD flags = get_ulong( &args );
@@ -4757,7 +4764,7 @@ NTSTATUS WINAPI wow64_NtUserSetWindowsHookEx( UINT *args )
     UNICODE_STRING32 *module32 = get_ptr( &args );
     DWORD tid = get_ulong( &args );
     INT id = get_ulong( &args );
-    HOOKPROC proc = get_ptr( &args );
+    HOOKPROC proc = get_callback( &args );
     BOOL ansi = get_ulong( &args );
     UNICODE_STRING module;
     HHOOK ret;
@@ -5124,7 +5131,7 @@ NTSTATUS WINAPI wow64_NtUserUnhookWinEvent( UINT *args )
 NTSTATUS WINAPI wow64_NtUserUnhookWindowsHook( UINT *args )
 {
     INT id = get_ulong( &args );
-    HOOKPROC proc = get_ptr( &args );
+    HOOKPROC proc = get_callback( &args );
 
     return NtUserUnhookWindowsHook( id, proc );
 }
